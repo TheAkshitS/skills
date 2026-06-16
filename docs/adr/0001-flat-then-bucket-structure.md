@@ -10,8 +10,8 @@ The repository needs a directory structure for organizing skills that scales
 from one skill to dozens. Two approaches were considered:
 
 1. **Always-bucketed**: every skill lives under a category folder from day one
-   (`skills/engineering/c4-diagrams/`).
-2. **Flat-then-bucket**: skills start flat (`skills/c4-diagrams/`), migrating to
+   (`skills/engineering/c4-views/`).
+2. **Flat-then-bucket**: skills start flat (`skills/c4-views/`), migrating to
    category buckets only when 3+ skills exist and grouping becomes meaningful.
 
 ## Decision

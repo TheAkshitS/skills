@@ -29,7 +29,7 @@ Pick the skills and agents you want.
 
 ## Skills
 
-- **[c4-diagrams](./skills/c4-diagrams/SKILL.md)** — Generate and review C4 model architecture diagrams in Mermaid, Structurizr DSL, or C4-PlantUML. _Trigger: "diagram", "architecture", "C4", "system context", "container diagram", "component diagram"_
+- **[c4-views](./skills/c4-views/SKILL.md)** — Generate and review C4 model architecture diagrams in Mermaid, Structurizr DSL, or C4-PlantUML. _Trigger: "diagram", "architecture", "C4", "system context", "container diagram", "component diagram"_
 
 ## Skill structure
 

@@ -1,0 +1,17 @@
+name: Validate Skills
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate skill frontmatter
+        run: bash scripts/validate-skills.sh
+      - name: Run validate-skills tests
+        run: bash tests/test-validate-skills.sh
+      - name: List skills
+        run: bash scripts/list-skills.sh

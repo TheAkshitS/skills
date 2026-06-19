@@ -8,6 +8,11 @@ and any [skills.sh](https://skills.sh)-compatible agent.
 If multiple `AGENTS.md` apply, the closest one to the edited file wins. Explicit
 chat prompts override everything. Treat this file as living documentation.
 
+## Validate
+
+Before committing any skill change: `bash scripts/validate-skills.sh` — must
+pass clean.
+
 ## Branching
 
 PRs target `develop`. `main` is release-only and is updated by the

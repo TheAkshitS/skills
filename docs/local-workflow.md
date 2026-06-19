@@ -37,12 +37,17 @@ skills.
 
 ## PR workflow
 
-1. Run `bash scripts/validate-skills.sh` — must pass clean.
-2. Update `README.md` and `docs/repo-layout.md` if adding, removing, or
-   reorganizing skills.
-3. Keep diffs minimal and focused on one skill or one change category.
-4. Update `CONTEXT.md` if you introduce a new domain term.
-5. Use [Conventional Commits](https://www.conventionalcommits.org/) for the PR
+1. Branch from `develop` (see [AGENTS.md](../AGENTS.md#branching) — `main` is
+   release-only).
+2. Run `bash scripts/validate-skills.sh` and `bash tests/test-validate-skills.sh`
+   — both must pass clean.
+3. Update `README.md` and `.claude-plugin/plugin.json` if adding, removing, or
+   reorganizing skills; update `docs/repo-layout.md` too if the structure
+   changed.
+4. Keep diffs minimal and focused on one skill or one change category.
+5. Update `CONTEXT.md` if you introduce a new domain term. Bucketing
+   decisions follow [ADR-0001](./adr/0001-flat-then-bucket-structure.md).
+6. Use [Conventional Commits](https://www.conventionalcommits.org/) for the PR
    title and squash-merge message. release-please reads them to bump semver.
 
 ## Releases

@@ -47,16 +47,44 @@ skills.
 
 ## Releases
 
-[release-please](https://github.com/googleapis/release-please) watches `main`
-and opens a single Release PR. Merging the Release PR tags the commit and
+[release-please](https://github.com/googleapis/release-please) runs on push to
+`main` only — not on pull requests. Merging a conventional PR into `main`
+opens a single Release PR; merging the Release PR tags the commit and
 publishes a GitHub Release.
 
-| Commit type    | Semver bump |
-| -------------- | ----------- |
-| `!` or `BREAKING CHANGE:` | major |
-| `feat`         | minor       |
-| `fix`, `perf`  | patch       |
-| anything else  | none        |
+### Files
 
-Current version lives in `.release-please-manifest.json`. Initial version:
-`0.1.0`. Tags are prefixed with `v` (e.g. `v0.2.0`).
+- `release-please-config.json` — strategy + tag format. Current config uses
+  `release-type: simple` (single package at the repo root, no `package.json`
+  required) with `v`-prefixed tags and `CHANGELOG.md` output.
+- `.release-please-manifest.json` — current released version. Initial: `0.1.0`.
+- `.github/workflows/release-please.yml` — triggers `googleapis/release-please-action@v4`
+  on `push` to `main`. Reads config from `main`, not the PR branch.
+
+> **Don't add a `package.json` to the repo root.** release-please will
+> silently switch the strategy from `simple` to `node` and look for a
+> `version` field there. If you need a `package.json`, move it under
+> `skills/<name>/` and add a matching `packages` entry in
+> `release-please-config.json` — do not change the root strategy without
+> updating this section.
+
+### Bump rules
+
+| Commit type                    | Semver bump |
+| ------------------------------ | ----------- |
+| `!` or `BREAKING CHANGE:`      | major       |
+| `feat`                         | minor       |
+| `fix`, `perf`                  | patch       |
+| anything else                  | none        |
+
+Tags are `v`-prefixed (e.g. `v0.2.0`). `CHANGELOG.md` is regenerated on
+each release.
+
+### Bootstrap
+
+The first time release-please runs on a fresh repo it will fail with
+`Missing required manifest config` if either config file is missing from
+`main`. Both files must land on `main` before the first release push — the
+bootstrap PR is responsible for this. After merge, the first Release PR
+will cut `v0.1.0` → next-version based on the first conventional commit
+on `main`.

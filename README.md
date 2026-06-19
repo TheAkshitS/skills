@@ -61,6 +61,12 @@ Validate frontmatter before committing:
 bash scripts/validate-skills.sh
 ```
 
+## Releases
+
+Automated via [release-please](https://github.com/googleapis/release-please)
+on push to `main`. See [docs/local-workflow.md](./docs/local-workflow.md#releases)
+for the file layout, semver bump rules, and bootstrap notes.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

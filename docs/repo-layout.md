@@ -33,3 +33,6 @@ behind this approach.
 - `scripts/validate-skills.sh` — frontmatter and consistency validation
 - `scripts/link-skills.sh` — symlink skills into `~/.claude/skills`
 - `scripts/list-skills.sh` — list all active skill paths
+- `.github/workflows/release-please.yml` — release-please CI trigger
+- `release-please-config.json` — release-please strategy config
+- `.release-please-manifest.json` — current released version (single source of truth)

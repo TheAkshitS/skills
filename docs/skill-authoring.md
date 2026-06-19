@@ -55,9 +55,5 @@ someone installing just that skill via `npx skills add`). This intentionally
 duplicates root-level install instructions — the per-skill README must work
 independently.
 
-## Contributing
-
-1. Fork and branch from `main`.
-2. Follow the steps above.
-3. Run `bash scripts/validate-skills.sh` — must pass clean.
-4. Open a PR with a description of the skill and example triggers.
+See [Local workflow & PR](./local-workflow.md) for branching, validation, and
+PR steps once a skill is authored.

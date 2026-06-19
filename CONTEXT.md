@@ -23,9 +23,11 @@ metadata the agent reads before loading the skill body: `name`, `description`,
 and optional fields like `argument-hint` and `disable-model-invocation`.
 
 **Bucket**:
-A category folder under `skills/` that groups related skills. Current buckets:
-none (flat structure). Planned buckets (adopt at 3+ skills): `engineering/`
-(daily code work), `productivity/` (general workflow), `misc/` (rarely used).
+A category folder under `skills/` that groups related skills. Current
+buckets: none (flat structure). See
+[repo layout](./docs/repo-layout.md#planned-structure-at-3-skills) for the
+planned bucket names and [ADR-0001](./docs/adr/0001-flat-then-bucket-structure.md)
+for the rationale.
 _Avoid_: category, group, folder (when referring to buckets specifically)
 
 **Reference**:

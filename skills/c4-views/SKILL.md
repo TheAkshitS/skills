@@ -152,8 +152,9 @@ sentence summary) is defined in `references/review-rubric.md`. Use it verbatim.
 
 ## 4. Choosing a notation
 
-Compact selector. Full copy-pasteable L1/L2/L3 templates and per-notation gotchas live in
-`references/notations.md`.
+Compact selector. (The frontmatter `description` mentions "Mermaid" as a single notation
+for trigger brevity; this section splits the two Mermaid variants.) Full copy-pasteable
+L1/L2/L3 templates and per-notation gotchas live in `references/notations.md`.
 
 | Notation | Choose when… | Renderer | Maturity caveat |
 |----------|--------------|----------|-----------------|

@@ -7,7 +7,10 @@ set -euo pipefail
 # This script targets Claude Code only. Other agents (opencode, Codex, Cursor)
 # use different skill directories — install via `npx skills add` for those.
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+# -P resolves symlinks so REPO matches `pwd -P` in the symlink-guard below
+# (macOS: /var -> /private/var; without -P the guard can fail to trip and
+# the script would write symlinks back into the repo).
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
 DEST="$HOME/.claude/skills"
 
 # If ~/.claude/skills is a symlink that points back into this repo, linking

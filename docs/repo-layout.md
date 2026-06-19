@@ -9,7 +9,7 @@
 
 ## Planned structure (at 3+ skills)
 
-Adopt category buckets under `skills/`:
+Adopt buckets under `skills/`:
 
 - `skills/engineering/<skill-name>/` — daily code work (diagrams, TDD, debugging, architecture)
 - `skills/productivity/<skill-name>/` — general workflow tools (grilling, handoff, teaching)
@@ -33,3 +33,6 @@ behind this approach.
 - `scripts/validate-skills.sh` — frontmatter and consistency validation
 - `scripts/link-skills.sh` — symlink skills into `~/.claude/skills`
 - `scripts/list-skills.sh` — list all active skill paths
+- `.github/workflows/release-please.yml` — release-please CI trigger
+- `release-please-config.json` — release-please strategy config
+- `.release-please-manifest.json` — current released version (single source of truth)

@@ -48,8 +48,15 @@ while IFS= read -r -d '' skill_md; do
   fm_desc="$(printf '%s' "$parsed" | jq -r '.data.description // empty')"
 
   # --- Validate name ---
+  # Kebab-case pattern: lowercase letters or digits, with optional single
+  # hyphens between segments. No leading/trailing hyphen, no consecutive
+  # hyphens. Matches the agentskills.io convention.
   if [ -z "$fm_name" ]; then
     echo "FAIL $name: missing 'name' in frontmatter" >&2
+    ERRORS=$((ERRORS + 1))
+    skill_errors=$((skill_errors + 1))
+  elif ! echo "$fm_name" | grep -qE '^[a-z0-9](-?[a-z0-9])*$'; then
+    echo "FAIL $name: name '$fm_name' must be kebab-case (lowercase letters, digits, optional single hyphens)" >&2
     ERRORS=$((ERRORS + 1))
     skill_errors=$((skill_errors + 1))
   elif [ "$fm_name" != "$name" ]; then
@@ -71,6 +78,11 @@ while IFS= read -r -d '' skill_md; do
       skill_errors=$((skill_errors + 1))
     fi
 
+    # Trigger-phrase check is intentionally broad (8+ phrases, case-insensitive)
+    # and a WARNING, not an error: false positives are fine, but a missing
+    # trigger phrase means the model may never load the skill. Do not tighten
+    # this regex without updating docs/skill-authoring.md and the template's
+    # "Use when..." guidance in tandem.
     if ! echo "$fm_desc" | grep -qiE '(use when|trigger|activate|invoke|run when|user says|user wants|user needs|mentions|asks for)'; then
       echo "WARN $name: description may lack trigger phrases (e.g. 'Use when...')" >&2
       WARNINGS=$((WARNINGS + 1))

@@ -71,6 +71,8 @@ def parse_frontmatter(path):
             return {"error": f"invalid frontmatter line {i + 2}: {raw.strip()!r}"}
 
         key = m.group(1)
+        if key in data:
+            return {"error": f"duplicate key '{key}' at line {i + 2}"}
         rest = m.group(2).strip()
 
         # Block scalar (| or >).
@@ -83,6 +85,16 @@ def parse_frontmatter(path):
                     break
                 block_lines.append(candidate)
                 i += 1
+
+            # YAML 1.2 disallows tabs in block-scalar indentation; reject before
+            # dedent so we don't silently miscount. (The loop above admits tabs
+            # to keep the block-end detection simple; the check below is the
+            # real guard.)
+            for offset, ln in enumerate(block_lines):
+                leading_ws = ln[: len(ln) - len(ln.lstrip(" \t"))]
+                if "\t" in leading_ws:
+                    line_no = i + 2 - len(block_lines) + offset
+                    return {"error": f"tab in block-scalar indentation (line {line_no})"}
 
             # Trim trailing blank lines, then dedent.
             while block_lines and not block_lines[-1].strip():

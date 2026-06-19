@@ -9,7 +9,7 @@
 
 ## Planned structure (at 3+ skills)
 
-Adopt category buckets under `skills/`:
+Adopt buckets under `skills/`:
 
 - `skills/engineering/<skill-name>/` — daily code work (diagrams, TDD, debugging, architecture)
 - `skills/productivity/<skill-name>/` — general workflow tools (grilling, handoff, teaching)

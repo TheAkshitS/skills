@@ -42,3 +42,21 @@ skills.
    reorganizing skills.
 3. Keep diffs minimal and focused on one skill or one change category.
 4. Update `CONTEXT.md` if you introduce a new domain term.
+5. Use [Conventional Commits](https://www.conventionalcommits.org/) for the PR
+   title and squash-merge message. release-please reads them to bump semver.
+
+## Releases
+
+[release-please](https://github.com/googleapis/release-please) watches `main`
+and opens a single Release PR. Merging the Release PR tags the commit and
+publishes a GitHub Release.
+
+| Commit type    | Semver bump |
+| -------------- | ----------- |
+| `!` or `BREAKING CHANGE:` | major |
+| `feat`         | minor       |
+| `fix`, `perf`  | patch       |
+| anything else  | none        |
+
+Current version lives in `.release-please-manifest.json`. Initial version:
+`0.1.0`. Tags are prefixed with `v` (e.g. `v0.2.0`).

@@ -19,6 +19,9 @@ Thanks for considering a contribution.
 - New skills are added to both `README.md` and `.claude-plugin/plugin.json`.
 - Bucketing decisions follow
   [ADR-0001](./docs/adr/0001-flat-then-bucket-structure.md).
+- Use [Conventional Commits](https://www.conventionalcommits.org/).
+  release-please reads commit types to bump semver and write
+  `CHANGELOG.md`.
 
 ## Questions
 

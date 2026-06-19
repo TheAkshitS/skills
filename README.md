@@ -4,7 +4,8 @@ Small, composable agent skills for real engineering work. Each skill is
 independent, trigger-activated, and designed to work with Claude Code and any
 [skills.sh](https://skills.sh)-compatible agent.
 
-[![skills.sh](https://skills.sh/b/TheAkshitS/skills)](https://skills.sh/TheAkshitS/skills)
+ [![skills.sh](https://skills.sh/b/TheAkshitS/skills)](https://skills.sh/TheAkshitS/skills)
+[![Release](https://img.shields.io/github/v/release/TheAkshitS/skills)](https://github.com/TheAkshitS/skills/releases)
 
 ## Why
 
@@ -59,6 +60,12 @@ Validate frontmatter before committing:
 ```bash
 bash scripts/validate-skills.sh
 ```
+
+## Releases
+
+Automated via [release-please](https://github.com/googleapis/release-please)
+on push to `main`. See [docs/local-workflow.md](./docs/local-workflow.md#releases)
+for the file layout, semver bump rules, and bootstrap notes.
 
 ## License
 

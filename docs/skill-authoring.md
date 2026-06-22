@@ -14,11 +14,12 @@
   the skill. Use for skills that should only run via explicit slash-command
   (e.g. setup wizards, teaching sessions).
 
-See `skills/_template/SKILL.md` for a full example.
+See `skills/_template/SKILL.md.template` for a full example.
 
 ## Adding a new skill
 
-1. Create `skills/<name>/SKILL.md` (or `skills/<bucket>/<name>/SKILL.md` once buckets are adopted).
+1. Copy `skills/_template/SKILL.md.template` to `skills/<name>/SKILL.md`
+   (or `skills/<bucket>/<name>/SKILL.md` once buckets are adopted).
 2. Add a linked entry under **Skills** in `README.md` with trigger phrases.
 3. Add the skill path to `.claude-plugin/plugin.json` under `"skills"`.
 4. Optionally add a nested `AGENTS.md` in `skills/<name>/` for skill-specific instructions.

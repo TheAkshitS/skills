@@ -26,7 +26,11 @@ These skills take the opposite approach:
 npx skills@latest add TheAkshitS/skills
 ```
 
-Pick the skills and agents you want.
+Pick the skills and agents you want. To grab one skill non-interactively:
+
+```bash
+npx skills@latest add TheAkshitS/skills -s c4-views -y
+```
 
 ## Skills
 

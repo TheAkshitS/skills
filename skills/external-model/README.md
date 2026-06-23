@@ -77,6 +77,33 @@ prompt sent to a live model.
 - **120s timeout** — each call is wrapped in a timeout to prevent runaway processes.
 - **Config files** — defaults live in `~/.claude/skills/external-model/config` (global). Override per-repo with `.claude/external-model.config` at your project root.
 
+## Smoke test (real invocation)
+
+Dry-run tests the wiring; this confirms a CLI is actually installed, authenticated, and returns live output.
+
+```bash
+# Step 1: confirm a CLI is installed
+bash scripts/run-model.sh detect
+
+# Step 2: run a tiny real prompt (not --dry-run)
+bash scripts/run-model.sh "Reply with exactly: ok"
+
+# Step 3: verify you see the model's text, not a DRYRUN line
+```
+
+For `kiro-cli`, set `KIRO_API_KEY` in your shell or it may hang waiting for browser login:
+
+```bash
+export KIRO_API_KEY="your-api-key"
+bash scripts/run-model.sh "Reply with exactly: ok"
+```
+
+Once you have more than one CLI installed, smoke-test all of them at once:
+
+```bash
+bash scripts/run-model.sh --all "Are you working?"
+```
+
 ## Reference
 
 - **[SKILL.md](./SKILL.md)** — full skill definition and implementation.

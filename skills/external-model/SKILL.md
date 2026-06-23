@@ -30,8 +30,8 @@ run-model.sh "prompt"                                   # default: read-only, sa
 run-model.sh --cli <opencode|cursor-agent|kiro-cli> --model <m> "prompt"
 run-model.sh --write "prompt"                            # allow file edits in the repo
 run-model.sh --all "prompt"                              # every installed CLI, forced read-only, side-by-side
-run-model.sh --dry-run "prompt"                              # print resolved command without running
-run-model.sh --context <file> "prompt"                       # prepend file contents to prompt
+run-model.sh --dry-run "prompt"                            # print resolved command without running
+run-model.sh --context <file> "prompt"                     # prepend file contents to prompt
 run-model.sh --timeout <sec> "prompt"
 run-model.sh detect                                      # list installed CLIs
 run-model.sh config show                                 # show resolved config
@@ -53,11 +53,9 @@ sandbox.
 prompt out to every installed CLI **in parallel** and returns the answers
 side by side, always read-only regardless of `--write`. It does **not**
 forward `--model`: each CLI runs with its own default model, because model
-names are not portable across these CLIs.
-
-`--all` always runs in a temp-dir sandbox and passes no model flag. If you
-also pass `--write`, the dispatcher prints a one-line note that `--write`
-is ignored and proceeds with read-only mode.
+names are not portable across these CLIs. If you also pass `--write`, the
+dispatcher prints a one-line note that `--write` is ignored and proceeds
+with read-only mode.
 
 ## Slash usage
 

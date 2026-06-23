@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/TheAkshitS/skills/compare/v0.2.0...v0.3.0) (2026-06-23)
+
+
+### Features
+
+* **external-model:** add skill to consult and delegate to external agentic CLIs ([75e41d6](https://github.com/TheAkshitS/skills/commit/75e41d609748e06b95ee366f3c8e5b55ad24fd75))
+* **external-model:** add skill to consult/delegate to external agentic CLIs ([813500c](https://github.com/TheAkshitS/skills/commit/813500c5c4296afb683ae79d1e3f121fb7c72fc8))
+* **external-model:** add skill to consult/delegate to external agentic CLIs ([513ba9c](https://github.com/TheAkshitS/skills/commit/513ba9c589e31509b32ba64becce51e89218325b))
+
+
+### Bug Fixes
+
+* **external-model:** correct dispatcher bugs surfaced by evals ([845e8e8](https://github.com/TheAkshitS/skills/commit/845e8e86db21e8c57099a665eccb3fc552747c87))
+* **external-model:** isolate eval tmp files under FAKE_HOME ([23546de](https://github.com/TheAkshitS/skills/commit/23546decb2568d96575c5946d565375d678d605a))
+* restore .release-please-manifest.json and CHANGELOG.md from main ([338fee0](https://github.com/TheAkshitS/skills/commit/338fee0ebc662c03e0b04a988e990621e6406bdb))
+
 ## [0.2.0](https://github.com/TheAkshitS/skills/compare/v0.1.0...v0.2.0) (2026-06-19)
 
 

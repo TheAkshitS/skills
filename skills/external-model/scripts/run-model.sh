@@ -271,17 +271,11 @@ if [[ "$SUBCMD" == "config" ]]; then
         die "$CONFIG_VERSION_ERROR"
       fi
       if out="$(resolve_default)"; then
-        if [[ -n "$CONFIG_VERSION_ERROR" ]]; then
-          die "$CONFIG_VERSION_ERROR"
-        fi
         IFS="$RD_SEP" read -r r_cli r_model r_src <<<"$out"
         printf 'cli:    %s\n' "$r_cli"
         if [[ -n "$r_model" ]]; then printf 'model:  %s\n' "$r_model"; else printf 'model:  (CLI default)\n'; fi
         printf 'source: %s\n' "$r_src"
       else
-        if [[ -n "$CONFIG_VERSION_ERROR" ]]; then
-          die "$CONFIG_VERSION_ERROR"
-        fi
         printf 'cli:    (none resolved)\n'
         printf 'model:  (CLI default)\n'
         printf 'source: no config; installed: %s\n' "$(installed_clis | tr '\n' ' ')"

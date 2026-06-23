@@ -25,14 +25,14 @@
         "stdout contains `mode=repo:/Users/z/Desktop/GH/skills` (the resolved git repo root)",
         "DRYRUN cmd array contains `cursor-agent`",
         "DRYRUN cmd array contains `--force`",
-        "DRYRUN cmd array's final element is the prompt `split billing.py into 3 files`",
+        "DRYRUN cmd array's final element (the prompt) contains `billing` and names the split targets `billing_core`, `billing_tax`, and `billing_report`",
         "stdout does not contain `sandbox(temp-dir)` (proves --write overrode the read-only sandbox)"
       ]
     },
     {
       "id": 3,
       "prompt": "Ask gpt-5 this: in a Postgres table with columns (id, user_id, created_at, amount_cents), what's the most efficient index to answer 'total amount per user in the last 30 days' and why would a composite (user_id, created_at) beat a single-column index on user_id here?",
-      "expected_output": "Skill resolves a CLI capable of running gpt-5 and invokes run-model.sh --model gpt-5 \"<prompt>\". The dispatcher does NOT translate model names per CLI: opencode receives the bare name -m gpt-5 (which opencode itself may reject — see references/cli-matrix.md Gotchas; user responsibility to pass the provider/model form like openai/gpt-5 when targeting opencode); cursor-agent takes the bare name -m gpt-5. If the resolved CLI is kiro-cli, the skill warns that kiro-cli headless has no model-select flag and --model will be ignored. The Postgres indexing question is the prompt body.",
+      "expected_output": "Skill demonstrates the per-CLI gpt-5 model-name mapping by running the dispatcher once per CLI: run-model.sh --cli <X> --model gpt-5 \"<prompt>\" for X in opencode, cursor-agent, kiro-cli. Expected per CLI: opencode receives the bare name -m gpt-5 (the user should pass the openai/gpt-5 provider form when targeting opencode — opencode may reject a bare name; see references/cli-matrix.md Gotchas); cursor-agent receives bare -m gpt-5; kiro-cli headless has no model-select flag, so -m is dropped from its cmd and the dispatcher warns 'kiro-cli headless has no model-select flag' on stderr. The Postgres indexing question is the prompt body in every run.",
       "files": [],
       "expectations": [
         "stdout contains `DRYRUN cmd: [opencode] [run] [-m] [gpt-5] [Postgres indexing question]` (opencode receives the bare model name as the dispatcher passes --model gpt-5 through unchanged)",

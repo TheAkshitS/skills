@@ -199,7 +199,7 @@ if [[ -n "$ARG_CLI" ]]; then
 fi
 
 # Numeric timeout sanity.
-if [[ -n "$TIMEOUT" && ! "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+if [[ -n "$TIMEOUT" && ! "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
   die "--timeout must be a positive integer (got '$TIMEOUT')"
 fi
 
@@ -391,7 +391,18 @@ build_cmd() {
     cursor-agent)
       CMD=(cursor-agent -p --output-format text)
       if [[ -n "$model" ]]; then CMD+=(-m "$model"); fi
-      if [[ "$write" -eq 1 ]]; then CMD+=(--force); fi
+      if [[ "$write" -eq 1 ]]; then
+        # --force already satisfies the workspace-trust gate (see below).
+        CMD+=(--force)
+      else
+        # Since the cursor-agent January 2026 release, non-interactive runs
+        # in an untrusted workspace fail unless --trust or --force is passed
+        # (https://cursor.com/docs/cli/changelog). The dispatcher's read-only
+        # mode always runs inside a fresh mktemp -d sandbox, which is an
+        # untrusted workspace on every invocation, so --trust is required
+        # here to avoid a hard failure instead of a clean read-only run.
+        CMD+=(--trust)
+      fi
       ;;
     kiro-cli)
       CMD=(kiro-cli chat --no-interactive)
@@ -429,9 +440,13 @@ run_one() {
 
   build_cmd "$cli" "$model" "$write"
 
-  # Build the full command (timeout wrapper + CMD) for both dry-run and real run.
+  # Build the full command. In dry-run, omit the `timeout` wrapper — it's a
+  # runtime safeguard, not part of the command semantics, and including it
+  # would make dry-run output depend on whether the host has GNU `timeout`
+  # installed (Linux yes, macOS no). On real runs, wrap when both TIMEOUT_BIN
+  # and TIMEOUT are set.
   local full=()
-  if [[ -n "$TIMEOUT_BIN" && -n "$TIMEOUT" ]]; then
+  if [[ -z "${EXTERNAL_MODEL_DRYRUN:-}" && -n "$TIMEOUT_BIN" && -n "$TIMEOUT" ]]; then
     full=("$TIMEOUT_BIN" "${TIMEOUT}s" "${CMD[@]}")
   else
     if [[ -z "$TIMEOUT_BIN" && -z "${EXTERNAL_MODEL_DRYRUN:-}" ]]; then
@@ -550,6 +565,9 @@ if [[ -n "$ARG_CLI" ]]; then
   # unless the same cli is the configured default — keep simple: explicit cli => explicit/none model).
   if [[ $ARG_MODEL_SET -eq 1 ]]; then RES_MODEL="$ARG_MODEL"; fi
 else
+  config_get "$GLOBAL_CONFIG" v >/dev/null
+  [[ -z "$CONFIG_VERSION_ERROR" ]] && config_get "$REPO_CONFIG" v >/dev/null
+  [[ -z "$CONFIG_VERSION_ERROR" ]] || die "$CONFIG_VERSION_ERROR"
   if out="$(resolve_default)"; then
     IFS="$RD_SEP" read -r RES_CLI RES_MODEL _src <<<"$out"
   else

@@ -22,7 +22,7 @@
       "files": [],
       "expectations": [
         "stdout contains `DRYRUN cli=cursor-agent`",
-        "stdout contains `mode=repo:/Users/z/Desktop/GH/skills` (the resolved git repo root)",
+        "stdout contains `mode=repo:/path/to/repo` (the resolved git repo root)",
         "DRYRUN cmd array contains `cursor-agent`",
         "DRYRUN cmd array contains `--force`",
         "DRYRUN cmd array's final element (the prompt) contains `billing` and names the split targets `billing_core`, `billing_tax`, and `billing_report`",
@@ -48,12 +48,12 @@
       "expected_output": "Skill invokes run-model.sh config set --cli opencode --model openai/gpt-5 (the bare 'set' alias is also accepted). This writes only the GLOBAL config file at ~/.claude/skills/external-model/config with lines CLI=opencode and MODEL=openai/gpt-5. Skill does NOT touch the per-repo .claude/external-model.config. Output confirms 'wrote global default: CLI=opencode MODEL=openai/gpt-5 -> <path>'.",
       "files": [],
       "expectations": [
-        "stdout contains `wrote global default: CLI=opencode MODEL=openai/gpt-5 -> /Users/z/.claude/skills/external-model/config`",
-        "the file `/Users/z/.claude/skills/external-model/config` exists after the run",
-        "the first line of `/Users/z/.claude/skills/external-model/config` is `v=1`",
-        "`/Users/z/.claude/skills/external-model/config` contains a line `CLI=opencode`",
-        "`/Users/z/.claude/skills/external-model/config` contains a line `MODEL=openai/gpt-5`",
-        "the per-repo file `/Users/z/Desktop/GH/skills/.claude/external-model.config` does not exist after the run (skill must NOT touch per-repo config)"
+        "stdout contains `wrote global default: CLI=opencode MODEL=openai/gpt-5 -> ~/.claude/skills/external-model/config`",
+        "the file `~/.claude/skills/external-model/config` exists after the run",
+        "the first line of `~/.claude/skills/external-model/config` is `v=1`",
+        "`~/.claude/skills/external-model/config` contains a line `CLI=opencode`",
+        "`~/.claude/skills/external-model/config` contains a line `MODEL=openai/gpt-5`",
+        "the per-repo file `/path/to/repo/.claude/external-model.config` does not exist after the run (skill must NOT touch per-repo config)"
       ]
     },
     {

@@ -54,7 +54,7 @@ bash scripts/run-model.sh config show
 
 ### Via slash commands (Claude Code)
 
-```
+```text
 /external-model Explain this regex: ^\d{3}-\d{4}$
 
 /external-model --cli cursor-agent --model gpt-5 Refactor this function...

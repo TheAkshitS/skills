@@ -25,7 +25,7 @@ skill's own directory (e.g. `<skill-dir>/scripts/run-model.sh`). The prompt is
 a single positional argument; quote it so multi-line or complex prompts arrive
 as one argv element.
 
-```
+```bash
 run-model.sh "prompt"                                   # default: read-only, sandboxed, 120s timeout
 run-model.sh --cli <opencode|cursor-agent|kiro-cli> --model <m> "prompt"
 run-model.sh --write "prompt"                            # allow file edits in the repo

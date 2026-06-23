@@ -35,6 +35,7 @@ npx skills@latest add TheAkshitS/skills -s c4-views -y
 ## Skills
 
 - **[c4-views](./skills/c4-views/SKILL.md)** — Generate and review C4 model architecture diagrams in Mermaid, Structurizr DSL, or C4-PlantUML. _Trigger: "diagram", "architecture", "C4", "system context", "container diagram", "component diagram"_
+- **[external-model](./skills/external-model/SKILL.md)** — Run a prompt through a different AI model via the opencode, cursor-agent, or kiro-cli command-line tools. _Trigger: "second opinion", "what would GPT-5/Gemini say", "delegate to cursor/opencode/kiro", "run with model X", "ask another model"_
 
 ## Skill structure
 

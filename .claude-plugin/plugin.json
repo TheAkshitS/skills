@@ -1,6 +1,7 @@
 {
   "name": "theakshits-skills",
   "skills": [
-    "./skills/c4-views"
+    "./skills/c4-views",
+    "./skills/external-model"
   ]
 }

@@ -4,8 +4,10 @@
 
 - `skills/<skill-name>/SKILL.md` — one folder per skill. Companion files
   (`references/*.md`, `scripts/`) sit beside `SKILL.md`.
-- `skills/_template/SKILL.md` — copy this to start a new skill. Not a real
-  skill; excluded from `link-skills.sh`, `validate-skills.sh`, and `plugin.json`.
+- `skills/_template/SKILL.md.template` — copy this to start a new skill. Not
+  a real skill; excluded from `link-skills.sh`, `validate-skills.sh`, and
+  `plugin.json`. Named `.template` (not `SKILL.md`) so the `skills.sh`
+  installer's filename-based scan skips it too.
 
 ## Planned structure (at 3+ skills)
 

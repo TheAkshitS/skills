@@ -100,6 +100,23 @@ done < <(find "$SKILLS_DIR" -name SKILL.md \
   -not -path '*/personal/*' \
   -print0)
 
+# --- Run per-skill eval graders (generic) ---
+# Any active skill that ships an executable evals/run.sh gets it run here; a
+# non-zero exit counts as an error. Skills without one (e.g. c4-views) are
+# unaffected. The SKILL.md dir is the skill source dir.
+for idx in "${!ACTIVE_PATHS[@]}"; do
+  eval_runner="$REPO/${ACTIVE_PATHS[$idx]}/evals/run.sh"
+  if [ -x "$eval_runner" ]; then
+    if out="$("$eval_runner" 2>&1)"; then
+      echo "OK   ${ACTIVE_SKILLS[$idx]}: evals"
+    else
+      printf 'FAIL %s: evals\n' "${ACTIVE_SKILLS[$idx]}" >&2
+      printf '  output:\n%s\n' "$out" >&2
+      ERRORS=$((ERRORS + 1))
+    fi
+  fi
+done
+
 # --- Check plugin.json sync ---
 PLUGIN_JSON="$REPO/.claude-plugin/plugin.json"
 if [ -f "$PLUGIN_JSON" ]; then

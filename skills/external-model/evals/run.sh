@@ -67,8 +67,9 @@ run_eval() {
 # --- eval-1: --all fans out read-only ---------------------------------------
 eval_1() {
   local out err rc=0
-  out="$("$DISPATCH" --all "second opinion on retry backoff" 2>/tmp/em_e1.err)" || rc=$?
-  err="$(cat /tmp/em_e1.err)"; rm -f /tmp/em_e1.err
+  local errfile="$FAKE_HOME/em_e1.err"
+  out="$("$DISPATCH" --all "second opinion on retry backoff" 2>"$errfile")" || rc=$?
+  err="$(cat "$errfile")"; rm -f "$errfile"
   local ok=0
   expect "missing ---- opencode ---- header" contains "---- opencode ----" "$out" || ok=1
   expect "missing ---- cursor-agent ---- header" contains "---- cursor-agent ----" "$out" || ok=1
@@ -102,10 +103,11 @@ eval_2() {
 # --- eval-3: per-CLI gpt-5 model mapping ------------------------------------
 eval_3() {
   local oc ca kc kc_err rc=0 ok=0
+  local errfile="$FAKE_HOME/em_e3.err"
   oc="$("$DISPATCH" --cli opencode --model gpt-5 "Postgres indexing question" 2>/dev/null)" || rc=$?
   ca="$("$DISPATCH" --cli cursor-agent --model gpt-5 "Postgres indexing question" 2>/dev/null)" || rc=$?
-  kc="$("$DISPATCH" --cli kiro-cli --model gpt-5 "Postgres indexing question" 2>/tmp/em_e3.err)" || rc=$?
-  kc_err="$(cat /tmp/em_e3.err)"; rm -f /tmp/em_e3.err
+  kc="$("$DISPATCH" --cli kiro-cli --model gpt-5 "Postgres indexing question" 2>"$errfile")" || rc=$?
+  kc_err="$(cat "$errfile")"; rm -f "$errfile"
 
   expect "opencode cmd mismatch" contains \
     "DRYRUN cmd: [opencode] [run] [-m] [gpt-5] [Postgres indexing question]" "$oc" || ok=1
@@ -151,7 +153,7 @@ eval_5() {
   # Fresh temp HOME with no config, and force resolution to the no-config
   # branch by ensuring there is more than one installed CLI (all stubs are).
   local out rc=0 ok=0
-  rm -rf "$HOME/.claude" 2>/dev/null || true
+  rm -rf "$FAKE_HOME/.claude" 2>/dev/null || true
   out="$("$DISPATCH" config show 2>/dev/null)" || rc=$?
   expect "missing cli: (none resolved) line" \
     contains "cli:    (none resolved)" "$out" || ok=1

@@ -13,14 +13,17 @@ Generate and review C4 model architecture diagrams in Mermaid, Structurizr DSL, 
 ### Via skills.sh (multi-harness)
 
 ```bash
-# From a GitHub repo
-npx skills add owner/repo
+# From this GitHub repo
+npx skills@latest add TheAkshitS/skills
+
+# Just this skill
+npx skills@latest add TheAkshitS/skills -s c4-views -y
 
 # From a local path
 npx skills add ./path/to/c4-views
 ```
 
-`npx skills add` auto-discovers `SKILL.md` — no manifest needed. It installs by symlink (default) or `--copy`. Use `--list` to preview what would be installed before running.
+`npx skills@latest add` auto-discovers `SKILL.md` — no manifest needed. It installs by symlink (default) or `--copy`. Use `--list` to preview what would be installed before running.
 
 #### Per-tool install targets
 

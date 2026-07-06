@@ -82,6 +82,17 @@
         "stdout does not contain `DRYRUN` (detect must not invoke or dry-run any model)",
         "exit code is 0 when at least one CLI is installed"
       ]
+    {
+      "id": 7,
+      "prompt": "I want to ask opencode: `-explain why this loop is O(n²)` — literally starting with a dash. Run that as a normal prompt without making me add a separate `--`.",
+      "expected_output": "The dispatcher must accept a prompt that starts with `-` as the first positional argument. It resolves to run-model.sh --cli opencode \"-explain why this loop is O(n²)\" and the DRYRUN output shows the child-CLI command with a `--` delimiter followed by the dash-prefixed prompt as the final element.",
+      "files": [],
+      "expectations": [
+        "exit code is 0",
+        "stdout contains `DRYRUN cli=opencode`",
+        "DRYRUN cmd array contains `[--]`",
+        "DRYRUN cmd array's final element is `[-explain why this loop is O(n²)]`"
+      ]
     }
   ]
 }

@@ -234,7 +234,16 @@ while [[ $# -gt 0 ]]; do
     --timeout) [[ $# -ge 2 ]] || die "--timeout requires a value"; TIMEOUT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --)        shift; if [[ $# -gt 0 ]]; then PROMPT="$1"; PROMPT_SET=1; shift; fi ;;
-    -*)        die "unknown option: $1" ;;
+    -*)
+      # First positional argument that happens to start with '-' is the prompt,
+      # not an unknown option. The child-CLI command already uses `--` to stop
+      # option parsing, but the dispatcher itself must accept the prompt first.
+      if [[ $PROMPT_SET -eq 0 ]]; then
+        PROMPT="$1"; PROMPT_SET=1; shift
+      else
+        die "unknown option: $1"
+      fi
+      ;;
     *)
       if [[ $PROMPT_SET -eq 0 ]]; then PROMPT="$1"; PROMPT_SET=1; shift
       else die "unexpected extra argument: $1"; fi

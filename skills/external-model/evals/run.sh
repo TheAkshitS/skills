@@ -181,6 +181,21 @@ eval_6() {
   return $ok
 }
 
+# --- eval-7: dash-prefixed prompt accepted without explicit -- -----------------
+eval_7() {
+  local out rc=0 ok=0
+  out="$("$DISPATCH" --cli opencode "-explain this code" 2>/dev/null)" || rc=$?
+  expect "exit code not 0" test "$rc" -eq 0 || ok=1
+  expect "missing opencode dry-run header" \
+    contains "DRYRUN cli=opencode" "$out" || ok=1
+  # The dispatcher must pass the prompt through; the child CLI gets `--` delimiter.
+  expect "cmd does not contain [--] delimiter" \
+    contains "[--]" "$out" || ok=1
+  expect "dash-prefixed prompt not in final cmd element" \
+    contains "[-explain this code]" "$out" || ok=1
+  return $ok
+}
+
 # --- Drive ------------------------------------------------------------------
 run_eval 1 "--all fans out read-only"
 run_eval 2 "--cli cursor-agent --write edits repo with --force"
@@ -188,9 +203,10 @@ run_eval 3 "per-CLI gpt-5 model mapping"
 run_eval 4 "config set writes global default only"
 run_eval 5 "config show reports no-config state"
 run_eval 6 "detect lists installed CLIs"
+run_eval 7 "dash-prefixed prompt accepted without explicit --"
 
 echo ""
-echo "external-model evals: $PASSES passed, $FAILS failed (6 total)"
+echo "external-model evals: $PASSES passed, $FAILS failed (7 total)"
 if [[ $FAILS -gt 0 ]]; then
   exit 1
 fi

@@ -533,7 +533,7 @@ run_one() {
     # suspenders, for prompt cleanup on normal (non-signal) completion of
     # this specific run, independent of when the rest of run_one finishes.
     ensure_run_tmpdir
-    sandbox="$(mktemp -d -p "$RUN_TMPDIR")"
+    sandbox="$(TMPDIR="$RUN_TMPDIR" mktemp -d)"
     trap 'rm -rf "$sandbox"' EXIT
     # Run the CLI as a BACKGROUND job and `wait` on it (mirrors the --all
     # fan-out path) rather than running it as a foreground command. A
@@ -549,7 +549,7 @@ run_one() {
     rc=0
     wait "$!" || rc=$?
     rm -rf "$sandbox"
-    trap - EXIT
+    trap 'rm -rf "$RUN_TMPDIR"' EXIT
     return "$rc"
   fi
 }

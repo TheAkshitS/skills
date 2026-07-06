@@ -18,27 +18,29 @@
     {
       "id": 2,
       "prompt": "I have a big refactor that splits src/legacy/billing.py into billing_core.py, billing_tax.py, and billing_report.py. Have cursor-agent handle it — it's good at large mechanical moves. Give it the repo access it needs to actually edit the files.",
-      "expected_output": "Skill resolves to run-model.sh --cli cursor-agent --write \"<prompt>\" so the run executes in the real repo cwd (not the temp sandbox) and passes --force to cursor-agent to allow unapproved edits. The CLI is explicitly pinned to cursor-agent per the user's request; the prompt describes the refactor task.",
+      "expected_output": "Skill resolves to run-model.sh --cli cursor-agent --write \"<prompt>\" so the run executes in the real repo cwd (not the temp sandbox) and passes --force to cursor-agent to allow unapproved edits. The CLI is explicitly pinned to cursor-agent per the user's request; the prompt describes the refactor task. The resolved command includes a `--` delimiter before the prompt to prevent flag injection, and the dispatcher emits a stderr warning that --write grants the external CLI repo write access.",
       "files": [],
       "expectations": [
         "stdout contains `DRYRUN cli=cursor-agent`",
         "stdout contains `mode=repo:/path/to/repo` (the resolved git repo root)",
         "DRYRUN cmd array contains `cursor-agent`",
         "DRYRUN cmd array contains `--force`",
+        "DRYRUN cmd array contains `--`",
         "DRYRUN cmd array's final element (the prompt) contains `billing` and names the split targets `billing_core`, `billing_tax`, and `billing_report`",
-        "stdout does not contain `sandbox(temp-dir)` (proves --write overrode the read-only sandbox)"
+        "stdout does not contain `sandbox(temp-dir)` (proves --write overrode the read-only sandbox)",
+        "stderr contains `warning: --write allows cursor-agent`"
       ]
     },
     {
       "id": 3,
       "prompt": "Ask gpt-5 this: in a Postgres table with columns (id, user_id, created_at, amount_cents), what's the most efficient index to answer 'total amount per user in the last 30 days' and why would a composite (user_id, created_at) beat a single-column index on user_id here?",
-      "expected_output": "Skill demonstrates the per-CLI gpt-5 model-name mapping by running the dispatcher once per CLI: run-model.sh --cli <X> --model gpt-5 \"<prompt>\" for X in opencode, cursor-agent, kiro-cli. Expected per CLI: opencode receives the bare name -m gpt-5 (the user should pass the openai/gpt-5 provider form when targeting opencode — opencode may reject a bare name; see references/cli-matrix.md Gotchas); cursor-agent receives bare -m gpt-5; kiro-cli headless has no model-select flag, so -m is dropped from its cmd and the dispatcher warns 'kiro-cli headless has no model-select flag' on stderr. The Postgres indexing question is the prompt body in every run.",
+      "expected_output": "Skill demonstrates the per-CLI gpt-5 model-name mapping by running the dispatcher once per CLI: run-model.sh --cli <X> --model gpt-5 \"<prompt>\" for X in opencode, cursor-agent, kiro-cli. Expected per CLI: opencode receives the bare name -m gpt-5 (the user should pass the openai/gpt-5 provider form when targeting opencode — opencode may reject a bare name; see references/cli-matrix.md Gotchas); cursor-agent receives bare -m gpt-5; kiro-cli headless has no model-select flag, so -m is dropped from its cmd and the dispatcher warns 'kiro-cli headless has no model-select flag' on stderr. In every command a `--` delimiter appears before the prompt so a prompt beginning with '-' cannot be parsed as a flag. The Postgres indexing question is the prompt body in every run.",
       "files": [],
       "expectations": [
-        "stdout contains `DRYRUN cmd: [opencode] [run] [-m] [gpt-5] [Postgres indexing question]` (opencode receives the bare model name as the dispatcher passes --model gpt-5 through unchanged)",
-        "stdout contains `DRYRUN cmd: [cursor-agent] [-p] [--output-format] [text] [-m] [gpt-5] [--trust] [Postgres indexing question]` (cursor-agent receives the bare model name per the CLI matrix)",
+        "stdout contains `DRYRUN cmd: [opencode] [run] [-m] [gpt-5] [--] [Postgres indexing question]` (opencode receives the bare model name as the dispatcher passes --model gpt-5 through unchanged; -- delimiter prevents flag injection)",
+        "stdout contains `DRYRUN cmd: [cursor-agent] [-p] [--output-format] [text] [-m] [gpt-5] [--trust] [--] [Postgres indexing question]` (cursor-agent receives the bare model name per the CLI matrix; -- delimiter prevents flag injection)",
         "stderr contains `kiro-cli headless has no model-select flag` (kiro-cli warning path)",
-        "stdout contains `DRYRUN cmd: [kiro-cli] [chat] [--no-interactive] [Postgres indexing question]` (kiro-cli has no model flag; --model is dropped from the cmd)",
+        "stdout contains `DRYRUN cmd: [kiro-cli] [chat] [--no-interactive] [--] [Postgres indexing question]` (kiro-cli has no model flag; --model is dropped from the cmd; -- delimiter prevents flag injection)",
         "the `DRYRUN cmd:` line for kiro-cli does not contain `[-m]` (proves --model was dropped from kiro-cli's resolved command; kiro-cli headless has no model-select flag)"
       ]
     },

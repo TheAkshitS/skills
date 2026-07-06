@@ -22,13 +22,15 @@ Sources: <https://opencode.ai/docs/cli>, <https://opencode.ai/docs/models>, <htt
 
 | CLI | Read-only mode | Write mode (`--write`) |
 |---|---|---|
-| opencode | `opencode run [-m <model>] "prompt"`; safety comes from a temp-dir sandbox, not a flag | same command run in the repo cwd — the temp-dir sandbox is the only read-only protection; opencode itself has no read-only flag |
-| cursor-agent | `cursor-agent -p --output-format text --trust [-m <model>] "prompt"` | `cursor-agent -p --output-format text [-m <model>] --force "prompt"` |
-| kiro-cli | `kiro-cli chat --no-interactive "prompt"` (requires `KIRO_API_KEY`) | `kiro-cli chat --no-interactive --trust-all-tools "prompt"` (requires `KIRO_API_KEY`) |
+| opencode | `opencode run [-m <model>] -- "prompt"`; safety comes from a temp-dir sandbox, not a flag | same command run in the repo cwd — the temp-dir sandbox is the only read-only protection; opencode itself has no read-only flag |
+| cursor-agent | `cursor-agent -p --output-format text --trust [-m <model>] -- "prompt"` | `cursor-agent -p --output-format text [-m <model>] --force -- "prompt"` |
+| kiro-cli | `kiro-cli chat --no-interactive -- "prompt"` (requires `KIRO_API_KEY`) | `kiro-cli chat --no-interactive --trust-all-tools -- "prompt"` (requires `KIRO_API_KEY`) |
 
-The prompt is always passed as the final positional argument (never on stdin).
-With `--all`, `--model` is not forwarded — each CLI runs with its own default
-model, because model names are not portable across these CLIs (see Gotchas).
+The prompt is always passed as the final positional argument after a `--`
+end-of-options delimiter (never on stdin), so a prompt beginning with `-` cannot
+be misinterpreted as a CLI flag. With `--all`, `--model` is not forwarded — each
+CLI runs with its own default model, because model names are not portable across
+these CLIs (see Gotchas).
 
 ## Gotchas
 

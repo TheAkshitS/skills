@@ -57,6 +57,31 @@ names are not portable across these CLIs. If you also pass `--write`, the
 dispatcher prints a one-line note that `--write` is ignored and proceeds
 with read-only mode.
 
+## Security & Trust
+
+This skill delegates your prompt (and any `--context` file contents) to a
+third-party CLI/binary and its associated model provider. That is its
+purpose, but it also expands the trust boundary: the external CLI runs with
+its own credentials, code, and safety policy.
+
+- **Read-only by default**: every run lands in a throwaway temp dir, so the
+  external model cannot read or edit your real repo unless you explicitly opt
+  in.
+- **`--write` is an explicit trust escalation**: it runs the external CLI in
+  your real repo cwd and passes its force/trust flag, allowing it to edit
+  files and bypass any approval prompts the CLI would normally show. Only use
+  it when you want the external model to mutate the repo.
+- **`--context` exposes file contents**: the contents of the named file are
+  prepended to the prompt and sent to the external model. Do not use it on
+  files you would not paste into that model's chat UI.
+- **Official CLIs only**: only use `opencode`, `cursor-agent`, or `kiro-cli`
+  installed from their official sources. The skill has no way to verify the
+  provenance of an arbitrary binary on `PATH`.
+- **Prompt boundary**: the dispatcher passes the prompt as a positional argv
+  argument separated by `--`, so a prompt starting with `-` cannot be
+  misinterpreted as a CLI flag. Still, treat the prompt itself as untrusted
+  third-party content when it originates from outside the current session.
+
 ## Slash usage
 
 - `/external-model <prompt>` — run a prompt through the resolved default CLI

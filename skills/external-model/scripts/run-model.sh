@@ -76,6 +76,14 @@ REPO_CONFIG="${REPO_ROOT}/.claude/external-model.config"
 err() { printf '%s\n' "$*" >&2; }
 die() { err "$*"; exit 1; }
 
+# Warnings are emitted to stderr for risky operations (--write, --context).
+# Set NO_WARN=1 (via --no-warn) to suppress them in automation.
+warn() {
+  if [[ "${NO_WARN:-0}" -eq 0 ]]; then
+    err "$*"
+  fi
+}
+
 usage() {
   cat <<'EOF'
 run-model.sh — run a prompt through an external AI CLI (opencode, cursor-agent, kiro-cli)
@@ -98,6 +106,7 @@ OPTIONS
   --dry-run          print resolved command/cwd/timeout instead of running
   --context <file>   read file and prepend contents to prompt (use - for stdin)
   --timeout <secs>   per-invocation timeout (default 120; env EXTERNAL_MODEL_TIMEOUT)
+  --no-warn          suppress trust/content warnings on stderr
   -h, --help         this help
 
 RESOLUTION PRECEDENCE (highest first)
@@ -107,10 +116,12 @@ RESOLUTION PRECEDENCE (highest first)
   the single installed CLI (if exactly one)
   otherwise: error listing detected CLIs, asking for --cli
 
-SAFETY
+SAFETY & TRUST
   Default mode is read-only: the CLI runs inside a throwaway temp dir, so it
   cannot mutate the real repo regardless of its own flags. --write runs in the
-  repo cwd and passes the CLI's trust/force flag.
+  repo cwd and passes the CLI's trust/force flag, giving the external model the
+  ability to edit files. Prompts and any --context file contents are sent to
+  the third-party CLI/model. Use --no-warn to suppress these warnings.
 
 ENV
   EXTERNAL_MODEL_TIMEOUT   default timeout in seconds
@@ -181,6 +192,7 @@ ARG_MODEL=""
 ARG_MODEL_SET=0
 WRITE=0
 ALL=0
+NO_WARN=0
 TIMEOUT="${EXTERNAL_MODEL_TIMEOUT:-$DEFAULT_TIMEOUT}"
 PROMPT=""
 PROMPT_SET=0
@@ -218,6 +230,7 @@ while [[ $# -gt 0 ]]; do
     --all)     ALL=1; shift ;;
     --context) [[ $# -ge 2 ]] || die "--context requires a value"; CONTEXT_FILE="$2"; shift 2 ;;
     --dry-run) export EXTERNAL_MODEL_DRYRUN=1; shift ;;
+    --no-warn) NO_WARN=1; shift ;;
     --timeout) [[ $# -ge 2 ]] || die "--timeout requires a value"; TIMEOUT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --)        shift; if [[ $# -gt 0 ]]; then PROMPT="$1"; PROMPT_SET=1; shift; fi ;;
@@ -384,6 +397,7 @@ if [[ -n "$CONTEXT_FILE" ]]; then
 
 ${PROMPT}"
   fi
+  warn "warning: --context forwards the contents of '$CONTEXT_FILE' to an external model."
 fi
 
 # ---------------------------------------------------------------------------
@@ -446,8 +460,9 @@ build_cmd() {
       die "internal: unknown cli '$cli'"
       ;;
   esac
-  # Prompt is always the final positional argument.
-  CMD+=("$PROMPT")
+  # End-of-options delimiter prevents a prompt starting with '-' from being
+  # parsed as a CLI flag; the prompt is always the final positional argument.
+  CMD+=(-- "$PROMPT")
 }
 
 # ---------------------------------------------------------------------------
@@ -461,6 +476,7 @@ run_one() {
 
   if [[ "$write" -eq 1 ]]; then
     cwd_kind="repo:$REPO_ROOT"
+    warn "warning: --write allows $cli to edit files in the repo and bypasses approval prompts; you are trusting a third-party binary."
   else
     cwd_kind="sandbox(temp-dir)"
   fi

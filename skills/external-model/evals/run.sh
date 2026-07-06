@@ -84,10 +84,12 @@ eval_1() {
 
 # --- eval-2: --cli cursor-agent --write -------------------------------------
 eval_2() {
-  local out rc=0
+  local out err rc=0
+  local errfile="$FAKE_HOME/em_e2.err"
   out="$("$DISPATCH" --cli cursor-agent --write \
     "refactor: split src/legacy/billing.py into billing_core.py, billing_tax.py, and billing_report.py" \
-    2>/dev/null)" || rc=$?
+    2>"$errfile")" || rc=$?
+  err="$(cat "$errfile")"; rm -f "$errfile"
   local ok=0
   expect "missing DRYRUN cli=cursor-agent" contains "DRYRUN cli=cursor-agent" "$out" || ok=1
   expect "missing mode=repo:$REPO_ROOT" contains "mode=repo:$REPO_ROOT" "$out" || ok=1
@@ -96,6 +98,8 @@ eval_2() {
   expect "prompt lacks billing_core" contains "billing_core" "$out" || ok=1
   expect "prompt lacks billing_tax" contains "billing_tax" "$out" || ok=1
   expect "prompt lacks billing_report" contains "billing_report" "$out" || ok=1
+  expect "missing -- delimiter in cursor-agent cmd" contains "[--] [refactor:" "$out" || ok=1
+  expect "missing --write warning" contains "warning: --write allows cursor-agent" "$err" || ok=1
   expect "--write did not override sandbox" not_contains "sandbox(temp-dir)" "$out" || ok=1
   return $ok
 }
@@ -110,13 +114,13 @@ eval_3() {
   kc_err="$(cat "$errfile")"; rm -f "$errfile"
 
   expect "opencode cmd mismatch" contains \
-    "DRYRUN cmd: [opencode] [run] [-m] [gpt-5] [Postgres indexing question]" "$oc" || ok=1
+    "DRYRUN cmd: [opencode] [run] [-m] [gpt-5] [--] [Postgres indexing question]" "$oc" || ok=1
   expect "cursor-agent cmd mismatch" contains \
-    "DRYRUN cmd: [cursor-agent] [-p] [--output-format] [text] [-m] [gpt-5] [--trust] [Postgres indexing question]" "$ca" || ok=1
+    "DRYRUN cmd: [cursor-agent] [-p] [--output-format] [text] [-m] [gpt-5] [--trust] [--] [Postgres indexing question]" "$ca" || ok=1
   expect "missing kiro-cli model-select warning" \
     contains "kiro-cli headless has no model-select flag" "$kc_err" || ok=1
   expect "kiro-cli cmd mismatch" contains \
-    "DRYRUN cmd: [kiro-cli] [chat] [--no-interactive] [Postgres indexing question]" "$kc" || ok=1
+    "DRYRUN cmd: [kiro-cli] [chat] [--no-interactive] [--] [Postgres indexing question]" "$kc" || ok=1
   # The kiro-cli DRYRUN cmd line must not carry [-m] (model dropped).
   local kc_cmdline
   kc_cmdline="$(grep 'DRYRUN cmd:' <<<"$kc" || true)"
@@ -177,6 +181,21 @@ eval_6() {
   return $ok
 }
 
+# --- eval-7: dash-prefixed prompt accepted without explicit -- -----------------
+eval_7() {
+  local out rc=0 ok=0
+  out="$("$DISPATCH" --cli opencode "-explain this code" 2>/dev/null)" || rc=$?
+  expect "exit code not 0" test "$rc" -eq 0 || ok=1
+  expect "missing opencode dry-run header" \
+    contains "DRYRUN cli=opencode" "$out" || ok=1
+  # The dispatcher must pass the prompt through; the child CLI gets `--` delimiter.
+  expect "cmd does not contain [--] delimiter" \
+    contains "[--]" "$out" || ok=1
+  expect "dash-prefixed prompt not in final cmd element" \
+    contains "[-explain this code]" "$out" || ok=1
+  return $ok
+}
+
 # --- Drive ------------------------------------------------------------------
 run_eval 1 "--all fans out read-only"
 run_eval 2 "--cli cursor-agent --write edits repo with --force"
@@ -184,9 +203,10 @@ run_eval 3 "per-CLI gpt-5 model mapping"
 run_eval 4 "config set writes global default only"
 run_eval 5 "config show reports no-config state"
 run_eval 6 "detect lists installed CLIs"
+run_eval 7 "dash-prefixed prompt accepted without explicit --"
 
 echo ""
-echo "external-model evals: $PASSES passed, $FAILS failed (6 total)"
+echo "external-model evals: $PASSES passed, $FAILS failed (7 total)"
 if [[ $FAILS -gt 0 ]]; then
   exit 1
 fi

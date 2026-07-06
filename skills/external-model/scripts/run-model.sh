@@ -1,12 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Propagate SIGINT/SIGTERM to the whole process group so the sandbox
-# subshell's EXIT trap fires and the temp dir is removed. Without this,
-# Ctrl-C leaks /tmp/tmp.XXXX dirs because the subshell never gets the
-# signal and never runs its cleanup trap.
-trap 'kill 0 2>/dev/null || true; exit 130' INT
-trap 'kill 0 2>/dev/null || true; exit 143' TERM
+# Script-global: lazily created (see ensure_run_tmpdir) on first sandbox use
+# as the SINGLE parent temp dir for every per-CLI sandbox in this invocation.
+# Each sandbox is `mktemp -d -p "$RUN_TMPDIR"` rather than a bare top-level
+# `mktemp -d`. This matters for --all: each CLI's run_one executes inside a
+# forked subshell (`run_one ... &`), so a per-call variable set inside that
+# child is invisible to the parent shell whose signal trap actually fires.
+# Nesting every sandbox under one parent dir that the PARENT shell created
+# (and remembers in this variable) lets the top-level trap below remove every
+# sandbox with a single `rm -rf "$RUN_TMPDIR"`, regardless of which shell —
+# parent or forked child — created the sandbox subdirectory inside it.
+RUN_TMPDIR=""
+
+ensure_run_tmpdir() {
+  if [[ -z "$RUN_TMPDIR" ]]; then
+    RUN_TMPDIR="$(mktemp -d)"
+  fi
+}
+
+# Propagate SIGINT/SIGTERM to the whole process group so all CLI children
+# die (single-CLI and every forked --all child alike), then remove
+# RUN_TMPDIR (sweeping every per-CLI sandbox in one shot) before exiting.
+# Without the process-group kill + RUN_TMPDIR sweep, Ctrl-C/SIGTERM leaks
+# running children and their /tmp/tmp.XXXX sandboxes because a foreground
+# child blocks this trap from running until the child itself exits.
+#
+# `trap '' INT TERM EXIT` is the first thing this does, before `kill 0`.
+# `kill 0` sends the signal to this process's own group, which includes
+# itself — so without disarming the traps first, a SIGINT handler's own
+# `kill 0` re-delivers SIGTERM to this very shell, re-entering this function
+# via the TERM trap, which would run to completion and `exit 143` before the
+# original INT call's `exit 130` is ever reached. Disarming first makes the
+# handler non-reentrant and preserves the originally-intended exit code.
+cleanup_and_exit() {
+  local code="$1"
+  trap '' INT TERM EXIT
+  kill 0 2>/dev/null || true
+  if [[ -n "$RUN_TMPDIR" ]]; then
+    rm -rf "$RUN_TMPDIR"
+    RUN_TMPDIR=""
+  fi
+  exit "$code"
+}
+trap 'cleanup_and_exit 130' INT
+trap 'cleanup_and_exit 143' TERM
+trap 'rm -rf "$RUN_TMPDIR"' EXIT
 
 # run-model.sh — dispatcher that normalizes three external agentic CLIs
 # (opencode, cursor-agent, kiro-cli) behind one stable interface.
@@ -37,6 +76,14 @@ REPO_CONFIG="${REPO_ROOT}/.claude/external-model.config"
 err() { printf '%s\n' "$*" >&2; }
 die() { err "$*"; exit 1; }
 
+# Warnings are emitted to stderr for risky operations (--write, --context).
+# Set NO_WARN=1 (via --no-warn) to suppress them in automation.
+warn() {
+  if [[ "${NO_WARN:-0}" -eq 0 ]]; then
+    err "$*"
+  fi
+}
+
 usage() {
   cat <<'EOF'
 run-model.sh — run a prompt through an external AI CLI (opencode, cursor-agent, kiro-cli)
@@ -59,6 +106,7 @@ OPTIONS
   --dry-run          print resolved command/cwd/timeout instead of running
   --context <file>   read file and prepend contents to prompt (use - for stdin)
   --timeout <secs>   per-invocation timeout (default 120; env EXTERNAL_MODEL_TIMEOUT)
+  --no-warn          suppress trust/content warnings on stderr
   -h, --help         this help
 
 RESOLUTION PRECEDENCE (highest first)
@@ -68,10 +116,12 @@ RESOLUTION PRECEDENCE (highest first)
   the single installed CLI (if exactly one)
   otherwise: error listing detected CLIs, asking for --cli
 
-SAFETY
+SAFETY & TRUST
   Default mode is read-only: the CLI runs inside a throwaway temp dir, so it
   cannot mutate the real repo regardless of its own flags. --write runs in the
-  repo cwd and passes the CLI's trust/force flag.
+  repo cwd and passes the CLI's trust/force flag, giving the external model the
+  ability to edit files. Prompts and any --context file contents are sent to
+  the third-party CLI/model. Use --no-warn to suppress these warnings.
 
 ENV
   EXTERNAL_MODEL_TIMEOUT   default timeout in seconds
@@ -142,6 +192,7 @@ ARG_MODEL=""
 ARG_MODEL_SET=0
 WRITE=0
 ALL=0
+NO_WARN=0
 TIMEOUT="${EXTERNAL_MODEL_TIMEOUT:-$DEFAULT_TIMEOUT}"
 PROMPT=""
 PROMPT_SET=0
@@ -179,10 +230,20 @@ while [[ $# -gt 0 ]]; do
     --all)     ALL=1; shift ;;
     --context) [[ $# -ge 2 ]] || die "--context requires a value"; CONTEXT_FILE="$2"; shift 2 ;;
     --dry-run) export EXTERNAL_MODEL_DRYRUN=1; shift ;;
+    --no-warn) NO_WARN=1; shift ;;
     --timeout) [[ $# -ge 2 ]] || die "--timeout requires a value"; TIMEOUT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --)        shift; if [[ $# -gt 0 ]]; then PROMPT="$1"; PROMPT_SET=1; shift; fi ;;
-    -*)        die "unknown option: $1" ;;
+    -*)
+      # First positional argument that happens to start with '-' is the prompt,
+      # not an unknown option. The child-CLI command already uses `--` to stop
+      # option parsing, but the dispatcher itself must accept the prompt first.
+      if [[ $PROMPT_SET -eq 0 ]]; then
+        PROMPT="$1"; PROMPT_SET=1; shift
+      else
+        die "unknown option: $1"
+      fi
+      ;;
     *)
       if [[ $PROMPT_SET -eq 0 ]]; then PROMPT="$1"; PROMPT_SET=1; shift
       else die "unexpected extra argument: $1"; fi
@@ -345,6 +406,7 @@ if [[ -n "$CONTEXT_FILE" ]]; then
 
 ${PROMPT}"
   fi
+  warn "warning: --context forwards the contents of '$CONTEXT_FILE' to an external model."
 fi
 
 # ---------------------------------------------------------------------------
@@ -407,8 +469,9 @@ build_cmd() {
       die "internal: unknown cli '$cli'"
       ;;
   esac
-  # Prompt is always the final positional argument.
-  CMD+=("$PROMPT")
+  # End-of-options delimiter prevents a prompt starting with '-' from being
+  # parsed as a CLI flag; the prompt is always the final positional argument.
+  CMD+=(-- "$PROMPT")
 }
 
 # ---------------------------------------------------------------------------
@@ -422,6 +485,7 @@ run_one() {
 
   if [[ "$write" -eq 1 ]]; then
     cwd_kind="repo:$REPO_ROOT"
+    warn "warning: --write allows $cli to edit files in the repo and bypasses approval prompts; you are trusting a third-party binary."
   else
     cwd_kind="sandbox(temp-dir)"
   fi
@@ -468,16 +532,34 @@ run_one() {
     # Stay in the repo cwd so the CLI can read/edit the real working tree.
     "${full[@]}"
   else
-    local sandbox
-    sandbox="$(mktemp -d)"
-    (
-      cd "$sandbox"
-      # Subshell EXIT trap keeps cleanup self-contained; doesn't leak to parent.
-      # The script-level INT/TERM trap (set near the top of this file)
-      # propagates signals to this subshell so the trap fires on Ctrl-C too.
-      trap 'rm -rf "$sandbox"' EXIT
-      "${full[@]}"
-    )
+    local sandbox rc
+    # Every sandbox nests under the single parent RUN_TMPDIR (created here on
+    # first use) instead of being its own top-level mktemp -d. That parent
+    # dir is known to the dispatcher's own (top-level-trap-owning) shell even
+    # when run_one itself executes inside a forked --all subshell, so the
+    # top-level INT/TERM trap can always find and remove it — see RUN_TMPDIR
+    # above. A local EXIT trap on the sandbox dir is kept too, belt and
+    # suspenders, for prompt cleanup on normal (non-signal) completion of
+    # this specific run, independent of when the rest of run_one finishes.
+    ensure_run_tmpdir
+    sandbox="$(TMPDIR="$RUN_TMPDIR" mktemp -d)"
+    trap 'rm -rf "$sandbox"' EXIT
+    # Run the CLI as a BACKGROUND job and `wait` on it (mirrors the --all
+    # fan-out path) rather than running it as a foreground command. A
+    # foreground child blocks bash from servicing signals until the child
+    # exits, so the top-level INT/TERM trap couldn't fire until the CLI
+    # finished on its own — leaking both the child and the sandbox dir on
+    # Ctrl-C/SIGTERM. `wait` on a background job, by contrast, is
+    # interrupted immediately when a trapped signal arrives, so the trap
+    # runs right away (see cleanup_and_exit at the top of this file), kills
+    # the process group (the child included), and removes RUN_TMPDIR (which
+    # contains $sandbox).
+    ( cd "$sandbox" && "${full[@]}" ) &
+    rc=0
+    wait "$!" || rc=$?
+    rm -rf "$sandbox"
+    trap 'rm -rf "$RUN_TMPDIR"' EXIT
+    return "$rc"
   fi
 }
 
@@ -502,6 +584,35 @@ if [[ $ALL -eq 1 ]]; then
     die "no external CLIs installed (looked for: ${CLIS[*]})"
   fi
 
+  # Emit the no-timeout warning once, here, in the parent before the fanout
+  # loop launches children. Each child runs run_one in its own forked
+  # subshell (via `&`), so WARNED_NO_TIMEOUT=1 set here is inherited by copy
+  # at fork time and the children's own warn_no_timeout_once calls become
+  # no-ops — instead of one warning per installed CLI.
+  if [[ -z "$TIMEOUT_BIN" && -z "${EXTERNAL_MODEL_DRYRUN:-}" ]]; then
+    warn_no_timeout_once
+  fi
+
+  # Install the --all-specific per-CLI stdout/err cleanup trap BEFORE the
+  # fanout, so a signal arriving between fork iterations still has the
+  # right handler. The trap string is re-evaluated on every signal, so it
+  # sees the cli_outf/cli_errf arrays' state at fire time — entries set
+  # so far are cleaned, unset entries (`rm -f ""`) are no-ops. The trap
+  # then delegates to cleanup_and_exit instead of doing its own ad hoc
+  # `kill 0` here, for the same two reasons as before:
+  #   1. RUN_TMPDIR sweep: cleanup_and_exit is what removes the
+  #      dispatcher-owned RUN_TMPDIR (or, in --all, no-ops it because
+  #      each child has its own — see RUN_TMPDIR above). A trap here
+  #      that only `kill 0`s and returns would kill every child but
+  #      never reach an `exit`, leaking every per-CLI sandbox dir and
+  #      leaving the shell to die from the raw signal instead of the
+  #      documented 130/143 exit code.
+  #   2. Non-reentrancy: cleanup_and_exit disarms INT/TERM/EXIT before
+  #      its own `kill 0`, so the self-delivered signal from that
+  #      `kill 0` can't re-enter any handler and clobber the originally-
+  #      intended exit code.
+  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; cleanup_and_exit 130' INT
+  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; cleanup_and_exit 143' TERM
   declare -a cli_pids=() cli_outf=() cli_errf=() cli_starts=()
   for i in "${!cli_list[@]}"; do
     c="${cli_list[$i]}"
@@ -511,9 +622,6 @@ if [[ $ALL -eq 1 ]]; then
     run_one "$c" "" 0 >"${cli_outf[$i]}" 2>"${cli_errf[$i]}" &
     cli_pids[$i]=$!
   done
-  # Clean up temp files on INT/TERM — the script-level trap kills children
-  # but exits immediately, so the per-file rm at the end never runs.
-  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; kill 0 2>/dev/null || true' INT TERM
 
   declare -a cli_rcs=() cli_elapsed=()
   for i in "${!cli_list[@]}"; do
@@ -553,15 +661,21 @@ fi
 RES_CLI=""
 RES_MODEL=""
 
+# Pre-scan GLOBAL/REPO configs for an explicit bad version BEFORE the
+# --cli/no-default-config branch below, so an explicit `--cli` can no longer
+# bypass the version gate. Must run in the current shell (not a `$(...)`
+# subshell) so the CONFIG_VERSION_ERROR side effect from config_get is
+# visible here. `--all` and `detect` exit earlier and are unaffected.
+config_get "$GLOBAL_CONFIG" v >/dev/null
+[[ -z "$CONFIG_VERSION_ERROR" ]] && config_get "$REPO_CONFIG" v >/dev/null
+[[ -z "$CONFIG_VERSION_ERROR" ]] || die "$CONFIG_VERSION_ERROR"
+
 if [[ -n "$ARG_CLI" ]]; then
   RES_CLI="$ARG_CLI"
   # model: explicit flag wins; otherwise leave empty (flags don't inherit config model here
   # unless the same cli is the configured default — keep simple: explicit cli => explicit/none model).
   if [[ $ARG_MODEL_SET -eq 1 ]]; then RES_MODEL="$ARG_MODEL"; fi
 else
-  config_get "$GLOBAL_CONFIG" v >/dev/null
-  [[ -z "$CONFIG_VERSION_ERROR" ]] && config_get "$REPO_CONFIG" v >/dev/null
-  [[ -z "$CONFIG_VERSION_ERROR" ]] || die "$CONFIG_VERSION_ERROR"
   if out="$(resolve_default)"; then
     IFS="$RD_SEP" read -r RES_CLI RES_MODEL _src <<<"$out"
   else
@@ -575,8 +689,10 @@ fi
 
 [[ -n "$RES_CLI" ]] || die "could not resolve a CLI to run (use --cli)."
 
-if [[ "$RES_CLI" == "kiro-cli" && $ARG_MODEL_SET -eq 1 && -n "$ARG_MODEL" ]]; then
-  err "warning: kiro-cli headless has no model-select flag; --model '$ARG_MODEL' will be ignored"
+# Warn regardless of where the model came from (explicit --model or a
+# config-sourced default) — kiro-cli headless drops it either way.
+if [[ "$RES_CLI" == "kiro-cli" && -n "$RES_MODEL" ]]; then
+  err "warning: kiro-cli headless has no model-select flag; --model '$RES_MODEL' will be ignored"
 fi
 
 run_one "$RES_CLI" "$RES_MODEL" "$WRITE"

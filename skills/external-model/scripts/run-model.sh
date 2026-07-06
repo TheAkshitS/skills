@@ -584,6 +584,26 @@ if [[ $ALL -eq 1 ]]; then
     warn_no_timeout_once
   fi
 
+  # Install the --all-specific per-CLI stdout/err cleanup trap BEFORE the
+  # fanout, so a signal arriving between fork iterations still has the
+  # right handler. The trap string is re-evaluated on every signal, so it
+  # sees the cli_outf/cli_errf arrays' state at fire time — entries set
+  # so far are cleaned, unset entries (`rm -f ""`) are no-ops. The trap
+  # then delegates to cleanup_and_exit instead of doing its own ad hoc
+  # `kill 0` here, for the same two reasons as before:
+  #   1. RUN_TMPDIR sweep: cleanup_and_exit is what removes the
+  #      dispatcher-owned RUN_TMPDIR (or, in --all, no-ops it because
+  #      each child has its own — see RUN_TMPDIR above). A trap here
+  #      that only `kill 0`s and returns would kill every child but
+  #      never reach an `exit`, leaking every per-CLI sandbox dir and
+  #      leaving the shell to die from the raw signal instead of the
+  #      documented 130/143 exit code.
+  #   2. Non-reentrancy: cleanup_and_exit disarms INT/TERM/EXIT before
+  #      its own `kill 0`, so the self-delivered signal from that
+  #      `kill 0` can't re-enter any handler and clobber the originally-
+  #      intended exit code.
+  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; cleanup_and_exit 130' INT
+  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; cleanup_and_exit 143' TERM
   declare -a cli_pids=() cli_outf=() cli_errf=() cli_starts=()
   for i in "${!cli_list[@]}"; do
     c="${cli_list[$i]}"
@@ -593,24 +613,6 @@ if [[ $ALL -eq 1 ]]; then
     run_one "$c" "" 0 >"${cli_outf[$i]}" 2>"${cli_errf[$i]}" &
     cli_pids[$i]=$!
   done
-  # Clean up the --all-specific per-CLI stdout/err temp files on INT/TERM,
-  # then delegate to the same top-level cleanup_and_exit used everywhere
-  # else, instead of doing its own ad hoc `kill 0` here. Two reasons this
-  # must delegate rather than duplicate:
-  #   1. RUN_TMPDIR sweep: cleanup_and_exit is what removes RUN_TMPDIR (the
-  #      single parent dir holding every forked child's sandbox — see
-  #      RUN_TMPDIR above). A trap here that only `kill 0`s and returns
-  #      would kill every child but never reach an `exit`, leaking every
-  #      per-CLI sandbox dir and leaving the shell to die from the raw
-  #      signal instead of the documented 130/143 exit code.
-  #   2. Non-reentrancy: cleanup_and_exit disarms INT/TERM/EXIT before its
-  #      own `kill 0`, so the self-delivered signal from that `kill 0` can't
-  #      re-enter any handler and clobber the originally-intended exit code.
-  # The previous (per-loop-iteration) trap value is irrelevant here — we're
-  # intentionally overriding it for the duration of the fanout/wait below,
-  # same as before, just routing to the shared handler instead of inlining.
-  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; cleanup_and_exit 130' INT
-  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; cleanup_and_exit 143' TERM
 
   declare -a cli_rcs=() cli_elapsed=()
   for i in "${!cli_list[@]}"; do

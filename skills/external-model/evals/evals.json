@@ -82,6 +82,7 @@
         "stdout does not contain `DRYRUN` (detect must not invoke or dry-run any model)",
         "exit code is 0 when at least one CLI is installed"
       ]
+    },
     {
       "id": 7,
       "prompt": "I want to ask opencode: `-explain why this loop is O(n²)` — literally starting with a dash. Run that as a normal prompt without making me add a separate `--`.",
@@ -92,6 +93,51 @@
         "stdout contains `DRYRUN cli=opencode`",
         "DRYRUN cmd array contains `[--]`",
         "DRYRUN cmd array's final element is `[-explain why this loop is O(n²)]`"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Ask opencode this, but use my notes directory as --context by accident: run-model.sh --context /some/directory \"summarize these notes\"",
+      "expected_output": "The dispatcher validates --context before building any command. Because the path exists but is a directory, not a regular file, it dies with '--context file is not a regular file: <path>' on stderr and exits non-zero before reaching build_cmd/dry-run output, so no DRYRUN line is printed.",
+      "files": [],
+      "expectations": [
+        "exit code is non-zero",
+        "stderr contains `--context file is not a regular file:` followed by the directory path",
+        "stdout does not contain `DRYRUN` (dies during --context validation, before build_cmd)"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Ask opencode with --context pointing at a huge log file that's well over the 256 KiB cap: run-model.sh --context ./huge.log \"what broke?\"",
+      "expected_output": "The dispatcher reads the --context file's size before injecting it into the prompt. Because the file is larger than CONTEXT_MAX_BYTES (262144 bytes), it refuses rather than silently truncating: dies with '--context file is too large: <path> (<size> bytes; limit is 262144 bytes)' on stderr and exits non-zero before any DRYRUN output.",
+      "files": [],
+      "expectations": [
+        "exit code is non-zero",
+        "stderr contains `--context file is too large:` followed by the file path",
+        "stderr contains `limit is 262144 bytes`",
+        "stdout does not contain `DRYRUN` (dies during --context size check, before build_cmd)"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Run with a bogus timeout: run-model.sh --timeout abc \"quick question\"",
+      "expected_output": "The dispatcher validates --timeout against ^[1-9][0-9]*$ right after argument parsing, before resolving any CLI. A non-numeric value like 'abc' fails that regex, so it dies with '--timeout must be a positive integer (got 'abc')' on stderr and exits non-zero before any DRYRUN output.",
+      "files": [],
+      "expectations": [
+        "exit code is non-zero",
+        "stderr contains `--timeout must be a positive integer (got 'abc')`",
+        "stdout does not contain `DRYRUN` (dies during --timeout validation, before CLI resolution)"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Run with a made-up CLI name: run-model.sh --cli nonexistent-tool \"quick question\"",
+      "expected_output": "The dispatcher validates --cli against the known set (opencode, cursor-agent, kiro-cli) immediately after argument parsing. An unrecognized value dies with \"unknown --cli 'nonexistent-tool' (valid: opencode, cursor-agent, kiro-cli)\" on stderr and exits non-zero before any DRYRUN output.",
+      "files": [],
+      "expectations": [
+        "exit code is non-zero",
+        "stderr contains `unknown --cli 'nonexistent-tool' (valid: opencode, cursor-agent, kiro-cli)`",
+        "stdout does not contain `DRYRUN` (dies during --cli validation, before CLI resolution)"
       ]
     }
   ]

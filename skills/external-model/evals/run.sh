@@ -196,6 +196,62 @@ eval_7() {
   return $ok
 }
 
+# --- eval-8: --context pointing at a directory ------------------------------
+eval_8() {
+  local out err rc=0 ok=0
+  local errfile="$FAKE_HOME/em_e8.err"
+  out="$("$DISPATCH" --context "$FAKE_HOME" "summarize these notes" 2>"$errfile")" || rc=$?
+  err="$(cat "$errfile")"; rm -f "$errfile"
+  expect "exit code not non-zero" test "$rc" -ne 0 || ok=1
+  expect "missing not-a-regular-file die message" \
+    contains "--context file is not a regular file: $FAKE_HOME" "$err" || ok=1
+  expect "unexpectedly reached DRYRUN output" not_contains "DRYRUN" "$out" || ok=1
+  return $ok
+}
+
+# --- eval-9: --context file over the 256 KiB cap ----------------------------
+eval_9() {
+  local out err rc=0 ok=0
+  local bigfile="$FAKE_HOME/em_e9_huge.log"
+  local errfile="$FAKE_HOME/em_e9.err"
+  head -c 300000 /dev/zero >"$bigfile"
+  out="$("$DISPATCH" --context "$bigfile" "what broke?" 2>"$errfile")" || rc=$?
+  err="$(cat "$errfile")"; rm -f "$errfile"
+  expect "exit code not non-zero" test "$rc" -ne 0 || ok=1
+  expect "missing too-large die message" \
+    contains "--context file is too large: $bigfile" "$err" || ok=1
+  expect "missing limit-bytes text" contains "limit is 262144 bytes" "$err" || ok=1
+  expect "unexpectedly reached DRYRUN output" not_contains "DRYRUN" "$out" || ok=1
+  rm -f "$bigfile"
+  return $ok
+}
+
+# --- eval-10: invalid --timeout value ---------------------------------------
+eval_10() {
+  local out err rc=0 ok=0
+  local errfile="$FAKE_HOME/em_e10.err"
+  out="$("$DISPATCH" --timeout abc "quick question" 2>"$errfile")" || rc=$?
+  err="$(cat "$errfile")"; rm -f "$errfile"
+  expect "exit code not non-zero" test "$rc" -ne 0 || ok=1
+  expect "missing bad-timeout die message" \
+    contains "--timeout must be a positive integer (got 'abc')" "$err" || ok=1
+  expect "unexpectedly reached DRYRUN output" not_contains "DRYRUN" "$out" || ok=1
+  return $ok
+}
+
+# --- eval-11: unknown --cli value -------------------------------------------
+eval_11() {
+  local out err rc=0 ok=0
+  local errfile="$FAKE_HOME/em_e11.err"
+  out="$("$DISPATCH" --cli nonexistent-tool "quick question" 2>"$errfile")" || rc=$?
+  err="$(cat "$errfile")"; rm -f "$errfile"
+  expect "exit code not non-zero" test "$rc" -ne 0 || ok=1
+  expect "missing unknown-cli die message" \
+    contains "unknown --cli 'nonexistent-tool' (valid: opencode, cursor-agent, kiro-cli)" "$err" || ok=1
+  expect "unexpectedly reached DRYRUN output" not_contains "DRYRUN" "$out" || ok=1
+  return $ok
+}
+
 # --- Drive ------------------------------------------------------------------
 run_eval 1 "--all fans out read-only"
 run_eval 2 "--cli cursor-agent --write edits repo with --force"
@@ -204,9 +260,13 @@ run_eval 4 "config set writes global default only"
 run_eval 5 "config show reports no-config state"
 run_eval 6 "detect lists installed CLIs"
 run_eval 7 "dash-prefixed prompt accepted without explicit --"
+run_eval 8 "--context pointing at a directory is rejected"
+run_eval 9 "--context file over the 256 KiB cap is rejected"
+run_eval 10 "invalid --timeout value is rejected"
+run_eval 11 "unknown --cli value is rejected"
 
 echo ""
-echo "external-model evals: $PASSES passed, $FAILS failed (7 total)"
+echo "external-model evals: $PASSES passed, $FAILS failed (11 total)"
 if [[ $FAILS -gt 0 ]]; then
   exit 1
 fi

@@ -57,6 +57,10 @@ trap 'rm -rf "$RUN_TMPDIR"' EXIT
 # ---------------------------------------------------------------------------
 CLIS=(opencode cursor-agent kiro-cli)
 DEFAULT_TIMEOUT=120
+# Cap on --context file size (bytes). Prevents silently ballooning the prompt
+# sent to a third-party CLI; enforced instead of silently truncating so the
+# user always knows exactly what was (or wasn't) sent.
+CONTEXT_MAX_BYTES=262144
 GLOBAL_CONFIG="${HOME}/.claude/skills/external-model/config"
 
 # Repo-root resolution: anchor per-repo config and --write cwd at the git
@@ -391,12 +395,24 @@ if [[ -n "$CONTEXT_FILE" ]]; then
   if [[ "$CONTEXT_FILE" == "-" ]]; then
     if [[ ! -t 0 ]]; then
       ctx="$(cat)"
+      # Same cap as the file path below: refuse rather than silently
+      # truncate, so an oversized stdin dump doesn't balloon the prompt
+      # without the user knowing.
+      ctx_size="$(printf '%s' "$ctx" | wc -c | tr -d '[:space:]')"
+      if [[ "$ctx_size" -gt "$CONTEXT_MAX_BYTES" ]]; then
+        die "--context - stdin is too large ($ctx_size bytes; limit is $CONTEXT_MAX_BYTES bytes)"
+      fi
     else
       die "--context - requires data on stdin"
     fi
   else
     [[ -e "$CONTEXT_FILE" ]] || die "--context file not found: $CONTEXT_FILE"
+    [[ -f "$CONTEXT_FILE" ]] || die "--context file is not a regular file: $CONTEXT_FILE"
     [[ -r "$CONTEXT_FILE" ]] || die "--context file not readable: $CONTEXT_FILE"
+    ctx_size="$(wc -c < "$CONTEXT_FILE" | tr -d '[:space:]')"
+    if [[ "$ctx_size" -gt "$CONTEXT_MAX_BYTES" ]]; then
+      die "--context file is too large: $CONTEXT_FILE ($ctx_size bytes; limit is $CONTEXT_MAX_BYTES bytes)"
+    fi
     ctx="$(<"$CONTEXT_FILE")"
   fi
   if [[ -n "$ctx" ]]; then

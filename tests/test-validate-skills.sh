@@ -259,23 +259,36 @@ else
   echo "PASS link-skills excludes _template"
 fi
 # Repo-symlink guard: if $DEST is already a symlink into the repo, the
-# script must refuse to run instead of writing symlinks back into skills/.
+# script must skip that target only (warn, exit 0) and leave it untouched,
+# while any other target in the same run still succeeds. This is the
+# documented "bail out for this target only; other targets still proceed"
+# design, so the test proves skip-one-continue-others, not just no-crash.
 guard_home="$TMPDIR/guard-home"
-mkdir -p "$guard_home/.claude/skills"
-ln -sfn "$TMPDIR" "$guard_home/.claude/skills-link"
-# Point $DEST (which is $HOME/.claude/skills) at $guard_home/.claude/skills,
-# which is a real dir that contains a symlink pointing into the repo's skills
-# tree. Simpler: make $DEST itself a symlink into the repo.
+mkdir -p "$(dirname "$guard_home/.claude/skills")"
 guard_dest="$guard_home/.claude/skills"
-rm -rf "$guard_dest"
 ln -sfn "$TMPDIR" "$guard_dest"
 guard_out="$(cd "$TMPDIR" && HOME="$guard_home" bash scripts/link-skills.sh 2>&1)" || guard_code=$?
 guard_code=${guard_code:-0}
-if [ "$guard_code" -ne 0 ] && echo "$guard_out" | grep -q "symlink into this repo"; then
-  echo "PASS link-skills guards against symlinked \$HOME/.claude/skills pointing into repo"
-else
-  echo "FAIL link-skills should have refused repo-symlink DEST (code=$guard_code out=$guard_out)"
+other_target="$guard_home/.pi/agent/skills/valid-skill"
+if [ "$guard_code" -ne 0 ]; then
+  echo "FAIL link-skills guard: expected exit 0 (skip-this-target-only), got $guard_code"
+  echo "$guard_out"
   FAILURES=$((FAILURES + 1))
+elif ! echo "$guard_out" | grep -q "symlink into this repo"; then
+  echo "FAIL link-skills guard: expected warning containing 'symlink into this repo'"
+  echo "$guard_out"
+  FAILURES=$((FAILURES + 1))
+elif [ "$(readlink "$guard_dest")" != "$TMPDIR" ]; then
+  echo "FAIL link-skills guard: offending target $guard_dest was modified (expected untouched symlink into repo)"
+  FAILURES=$((FAILURES + 1))
+elif [ -e "$TMPDIR/valid-skill" ]; then
+  echo "FAIL link-skills guard: script wrote through the symlinked target back into the repo"
+  FAILURES=$((FAILURES + 1))
+elif [ ! -L "$other_target" ]; then
+  echo "FAIL link-skills guard: other target $other_target should still be linked (skip-one-continue-others)"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS link-skills guards against symlinked \$HOME/.claude/skills pointing into repo, other targets still succeed"
 fi
 rm -rf "$TMPDIR/skills/valid-skill"
 

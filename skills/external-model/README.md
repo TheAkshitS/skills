@@ -73,7 +73,7 @@ prompt sent to a live model.
 
 ## Defaults & safety
 
-- **Read-only by default** — the external model runs in a throwaway temp dir and cannot touch or see your repo. If you need the model to edit files, use `--write` to opt in. `--write` passes the wrapped CLI's trust flag (`--force`, `--yolo`, or `--trust-all-tools`), which removes approval gates for all tools — enabling file edits, shell command execution, and unrestricted tool access.
+- **Read-only by default** — the external model runs in a throwaway temp dir and cannot touch or see your repo. If you need the model to edit files, use `--write` to opt in. `--write` passes the wrapped CLI's trust flag (`--force` or `--trust-all-tools`), which removes approval gates for all tools — enabling file edits, shell command execution, and unrestricted tool access.
 - **120s timeout** — each call is wrapped in a timeout to prevent runaway processes.
 - **Config files** — defaults live in `~/.claude/skills/external-model/config` (global). Override per-repo with `.claude/external-model.config` at your project root.
 - **Prompt boundary** — the dispatcher passes the prompt as a positional argument after `--`, so prompts starting with `-` cannot be misinterpreted as CLI flags.

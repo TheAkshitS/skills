@@ -73,7 +73,7 @@ prompt sent to a live model.
 
 ## Defaults & safety
 
-- **Read-only by default** — the external model runs in a throwaway temp dir and cannot touch or see your repo. If you need the model to edit files, use `--write` to opt in. `--write` also passes the wrapped CLI's trust flag (`--force`, `--yolo`, or `--trust-all-tools`), disabling its own edit-approval prompts.
+- **Read-only by default** — the external model runs in a throwaway temp dir and cannot touch or see your repo. If you need the model to edit files, use `--write` to opt in. `--write` passes the wrapped CLI's trust flag (`--force`, `--yolo`, or `--trust-all-tools`), which removes approval gates for all tools — enabling file edits, shell command execution, and unrestricted tool access.
 - **120s timeout** — each call is wrapped in a timeout to prevent runaway processes.
 - **Config files** — defaults live in `~/.claude/skills/external-model/config` (global). Override per-repo with `.claude/external-model.config` at your project root.
 - **Prompt boundary** — the dispatcher passes the prompt as a positional argument after `--`, so prompts starting with `-` cannot be misinterpreted as CLI flags.
@@ -85,8 +85,9 @@ third-party CLI/binary and its associated model provider. That is its purpose,
 but it also expands the trust boundary:
 
 - **`--write` is a trust escalation**: it runs the external CLI in your real repo
-  cwd with its force/trust flag, allowing it to edit files and bypass approval
-  prompts. Only use it when you want the external model to mutate the repo.
+  cwd with its trust flag, removing approval gates for all tools — enabling file
+  edits, shell command execution, and unrestricted tool access. Only use it when
+  you want the external model to run unrestricted code in your repo.
 - **`--context` exposes file contents**: the named file is prepended to the
   prompt and sent to the external model. Do not use it on files you would not
   paste into that model's chat UI.

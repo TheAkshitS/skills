@@ -71,7 +71,11 @@ while IFS= read -r -d '' skill_md; do
     ERRORS=$((ERRORS + 1))
     skill_errors=$((skill_errors + 1))
   else
-    desc_len=${#fm_desc}
+    # Count characters, not bytes: bash's ${#var} is locale-dependent and
+    # counts bytes under a C/POSIX locale, which would falsely flag multibyte
+    # UTF-8 descriptions (em dashes, accents, non-Latin scripts) as over the
+    # spec's 1024-*character* limit. python3 is already a hard dependency here.
+    desc_len="$(python3 -c 'import sys; print(len(sys.argv[1]))' "$fm_desc")"
     if [ "$desc_len" -gt 1024 ]; then
       echo "FAIL $name: description too long ($desc_len chars, max 1024)" >&2
       ERRORS=$((ERRORS + 1))
@@ -102,8 +106,7 @@ done < <(find "$SKILLS_DIR" -name SKILL.md \
 
 # --- Run per-skill eval graders (generic) ---
 # Any active skill that ships an executable evals/run.sh gets it run here; a
-# non-zero exit counts as an error. Skills without one (e.g. c4-views) are
-# unaffected. The SKILL.md dir is the skill source dir.
+# non-zero exit counts as an error. The SKILL.md dir is the skill source dir.
 for idx in "${!ACTIVE_PATHS[@]}"; do
   eval_runner="$REPO/${ACTIVE_PATHS[$idx]}/evals/run.sh"
   if [ -x "$eval_runner" ]; then
@@ -116,6 +119,44 @@ for idx in "${!ACTIVE_PATHS[@]}"; do
     fi
   fi
 done
+
+# --- Description-trigger evals (hermetic proxy) ---
+# Runs scripts/eval-triggers.sh: asserts each skill's declared trigger_phrases
+# appear in its description and that declared positive/negative prompts
+# correctly do/don't overlap those phrases. A real activation eval calls an
+# LLM; this is the structural prerequisite. Skills with no evals/triggers.json
+# are skipped silently (the file is recommended, not required).
+if [ -x "$REPO/scripts/eval-triggers.sh" ]; then
+  if out="$("$REPO/scripts/eval-triggers.sh" 2>&1)"; then
+    :   # eval-triggers.sh prints its own per-skill OK lines
+  else
+    printf '%s\n' "$out" >&2
+    ERRORS=$((ERRORS + 1))
+  fi
+fi
+
+# --- skills-ref (optional) ---
+# The agentskills.io spec points at the `skills-ref validate` reference
+# validator (https://github.com/agentskills/agentskills, skills-ref/). It is
+# not on npm; users install it separately. If it is on PATH, run it against
+# each skill and surface failures. If it is absent, emit one informational
+# line and continue — the in-repo frontmatter parser already enforces the
+# spec-required rules (kebab name + dir match + description length + trigger
+# phrases), so this is a complementary, not load-bearing, check.
+if command -v skills-ref >/dev/null 2>&1; then
+  for idx in "${!ACTIVE_PATHS[@]}"; do
+    skill_dir="$REPO/${ACTIVE_PATHS[$idx]}"
+    if out="$(skills-ref validate "$skill_dir" 2>&1)"; then
+      echo "OK   ${ACTIVE_SKILLS[$idx]}: skills-ref"
+    else
+      printf 'FAIL %s: skills-ref\n' "${ACTIVE_SKILLS[$idx]}" >&2
+      printf '  %s\n' "$out" >&2
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+else
+  echo "note: skills-ref not on PATH (optional, install from agentskills/agentskills)"
+fi
 
 # --- Check plugin.json sync ---
 PLUGIN_JSON="$REPO/.claude-plugin/plugin.json"
@@ -141,6 +182,48 @@ if [ -f "$README_MD" ]; then
     fi
   done
 fi
+
+# --- Check in-repo distribution mirrors ---
+# .claude/skills/ and .agents/skills/ are committed copies that let the repo
+# work as a drop-in folder for Claude Code + pi + opencode. Each active
+# skill must have a copy in both, and the SKILL.md must match. Drift here
+# means a user who clones the repo gets stale skills. Fix: run
+# scripts/sync-copied-skills.sh.
+for mirror_rel in .claude/skills .agents/skills; do
+  mirror_abs="$REPO/$mirror_rel"
+  if [ ! -d "$mirror_abs" ]; then
+    echo "WARN $mirror_rel/ missing — run scripts/sync-copied-skills.sh" >&2
+    WARNINGS=$((WARNINGS + 1))
+    continue
+  fi
+
+  for idx in "${!ACTIVE_PATHS[@]}"; do
+    skill_path="${ACTIVE_PATHS[$idx]}"
+    # Use the same relative path the plugin.json/README checks use, so bucketed
+    # skills (skills/<bucket>/<name>) that the find walk supports are compared
+    # against the right mirror file. The mirror preserves the sub-tree under
+    # skills/, so strip that prefix to get the path relative to the mirror root.
+    rel_skill="${skill_path#skills/}"
+    src_skill="$REPO/$skill_path/SKILL.md"
+    mirror_skill="$mirror_abs/$rel_skill/SKILL.md"
+
+    if [ ! -f "$mirror_skill" ]; then
+      echo "WARN $mirror_rel/$rel_skill/SKILL.md missing — run scripts/sync-copied-skills.sh" >&2
+      WARNINGS=$((WARNINGS + 1))
+      continue
+    fi
+
+    # Compare just the frontmatter (between the two --- delimiters at the top).
+    # The full bodies can legitimately differ in trailing whitespace, but the
+    # metadata block is what determines what the harness sees.
+    src_fm="$(awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f {print}' "$src_skill")"
+    mirror_fm="$(awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f {print}' "$mirror_skill")"
+    if [ "$src_fm" != "$mirror_fm" ]; then
+      echo "WARN $mirror_rel/$rel_skill frontmatter drifted from $skill_path — run scripts/sync-copied-skills.sh" >&2
+      WARNINGS=$((WARNINGS + 1))
+    fi
+  done
+done
 
 # --- Summary ---
 echo ""

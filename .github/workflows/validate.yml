@@ -13,9 +13,24 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Shellcheck
+        if: runner.os == 'Linux'
+        run: |
+          shopt -s nullglob
+          files=(scripts/*.sh scripts/lib/*.sh skills/*/scripts/*.sh skills/*/evals/*.sh)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No shell scripts found to lint."
+            exit 0
+          fi
+          shellcheck -S error "${files[@]}"
       - name: Validate skill frontmatter
         run: bash scripts/validate-skills.sh
       - name: Run validate-skills tests

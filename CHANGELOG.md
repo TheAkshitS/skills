@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/TheAkshitS/skills/compare/v0.5.0...v0.5.1) (2026-07-09)
+
+
+### Bug Fixes
+
+* **external-model:** make description valid strict YAML; guard the class ([14b70ef](https://github.com/TheAkshitS/skills/commit/14b70ef373b2f7cc558e70b5bd0e1bb547edb539))
+* **external-model:** valid strict-YAML description + guard ([65e328e](https://github.com/TheAkshitS/skills/commit/65e328e4498413840dbee654789e643e46d7a45b))
+
 ## [0.5.0](https://github.com/TheAkshitS/skills/compare/v0.4.0...v0.5.0) (2026-07-09)
 
 

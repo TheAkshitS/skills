@@ -84,29 +84,38 @@ JSON
   echo ""
 
   if [ "$WRITE" -eq 1 ]; then
+    if [ -f "$target" ] && ! command -v jq >/dev/null 2>&1; then
+      echo "warning: $target exists and jq is not available to merge safely." >&2
+      echo "  Please edit it manually and add the 'skills' key above." >&2
+      exit 1
+    fi
+
     if [ "$DRY_RUN" -eq 1 ]; then
-      echo "[dry-run] would merge into $target"
+      if [ -f "$target" ]; then
+        echo "[dry-run] would merge into $target"
+      else
+        echo "[dry-run] would write $target"
+      fi
       return 0
     fi
+
     mkdir -p "$(dirname "$target")"
     if [ -f "$target" ]; then
-      if command -v jq >/dev/null 2>&1; then
-        # Merge: append the repo's skills path to any existing array (or create).
-        local tmp
-        tmp="$(mktemp)"
-        trap 'rm -f "$tmp"' EXIT
-        if jq --arg path "$repo_skills" '
-          .skills = ((.skills // []) | if index($path) then . else . + [$path] end)
-        ' "$target" > "$tmp"; then
-          mv "$tmp" "$target"
-          echo "merged into existing $target"
-        else
-          echo "warning: $target exists and jq failed to process it." >&2
-          echo "  Please edit it manually and add the 'skills' key above." >&2
-          exit 1
-        fi
+      # Merge: append the repo's skills path to any existing array (or create).
+      # Clean up the temp inline rather than via an EXIT trap: the trap would
+      # reference this function-local $tmp after it leaves scope, tripping
+      # `set -u`'s unbound-variable check at script exit *after* a successful
+      # merge. On success `mv` consumes $tmp; on failure we rm it explicitly.
+      local tmp
+      tmp="$(mktemp)"
+      if jq --arg path "$repo_skills" '
+        .skills = ((.skills // []) | if index($path) then . else . + [$path] end)
+      ' "$target" > "$tmp"; then
+        mv "$tmp" "$target"
+        echo "merged into existing $target"
       else
-        echo "warning: $target exists and jq is not available to merge safely." >&2
+        rm -f "$tmp"
+        echo "warning: $target exists and jq failed to process it." >&2
         echo "  Please edit it manually and add the 'skills' key above." >&2
         exit 1
       fi
@@ -130,6 +139,13 @@ do_project() {
 JSON
 )"
 
+  if [ -f "$target" ]; then
+    echo "error: $target already exists. Edit it manually to add the 'skills' key." >&2
+    echo "" >&2
+    cat "$target" >&2
+    exit 1
+  fi
+
   echo "Would write $target in $(pwd) with:"
   echo ""
   printf '%s\n' "$snippet"
@@ -137,13 +153,6 @@ JSON
 
   if [ "$DRY_RUN" -eq 1 ]; then
     return 0
-  fi
-
-  if [ -f "$target" ]; then
-    echo "error: $target already exists. Edit it manually to add the 'skills' key." >&2
-    echo "" >&2
-    cat "$target" >&2
-    exit 1
   fi
 
   mkdir -p .pi

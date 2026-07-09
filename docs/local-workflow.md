@@ -22,7 +22,9 @@ bash scripts/validate-skills.sh
 Verifies every skill folder has `SKILL.md` with valid `name` (matching folder)
 and `description` (under 1024 chars, with trigger phrases) in frontmatter.
 Also checks that all active skills are listed in `plugin.json` and linked in
-`README.md`.
+`README.md`. Runs `scripts/eval-triggers.sh` along the way to assert each
+skill's `evals/triggers.json` prompts match its declared trigger phrases
+(skills without that file are skipped).
 
 ## List skills
 

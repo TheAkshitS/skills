@@ -1,0 +1,28 @@
+{
+  "skill_name": "c4-views",
+  "trigger_phrases": [
+    "C4",
+    "architecture diagram",
+    "context/container/component",
+    "Mermaid",
+    "Structurizr",
+    "C4-PlantUML"
+  ],
+  "positive": [
+    "Diagram the architecture of my payment service using C4",
+    "Draw a context/container/component set for this codebase",
+    "Review this Mermaid architecture diagram against C4 rules",
+    "Author a Structurizr workspace for our system and its containers",
+    "Sanity-check this C4-PlantUML — does it mix abstraction levels?"
+  ],
+  "negative": [
+    "Refactor this function to use early returns instead of nesting",
+    "Explain the difference between let and var in JavaScript",
+    "Write a SQL query to find the top 3 customers by revenue",
+    "Set up a CI workflow with GitHub Actions for this repo",
+    "Plot a bar chart of monthly sales data from sales.csv",
+    "Review my pull request for typo and formatting fixes",
+    "Design a database schema for an e-commerce platform with SQLAlchemy",
+    "Trace the request flow through the middleware stack and back"
+  ]
+}

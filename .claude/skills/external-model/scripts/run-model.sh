@@ -1,0 +1,822 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Script-global: lazily created (see ensure_run_tmpdir) on first sandbox use
+# as the SINGLE parent temp dir for every per-CLI sandbox in this invocation.
+# Each sandbox is `mktemp -d -p "$RUN_TMPDIR"` rather than a bare top-level
+# `mktemp -d`. This matters for --all: each CLI's run_one executes inside a
+# forked subshell (`run_one ... &`), so a per-call variable set inside that
+# child is invisible to the parent shell whose signal trap actually fires.
+# Nesting every sandbox under one parent dir that the PARENT shell created
+# (and remembers in this variable) lets the top-level trap below remove every
+# sandbox with a single `rm -rf "$RUN_TMPDIR"`, regardless of which shell —
+# parent or forked child — created the sandbox subdirectory inside it.
+RUN_TMPDIR=""
+
+# `set -m` (job control / monitor mode) makes every top-level `foo &` job get
+# its OWN process group (pgid == the job's own pid) instead of inheriting
+# this script's process group. That's what makes CHILD_PIDS below usable for
+# targeted cleanup: `kill -TERM -<pid>` (negative pid = whole group) reaches
+# a job's full subtree (e.g. the `timeout` wrapper plus the CLI it wraps)
+# without touching this script's own inherited group. See cleanup_and_exit's
+# comment for why that distinction matters.
+set -m
+
+# Every PID this script itself backgrounds at top level (the single-run job
+# in run_one, and — for --all — each per-CLI run_one fork via cli_pids)
+# should be tracked here so cleanup_and_exit can kill exactly those jobs and
+# nothing else. run_one appends to this on the single-run path and removes
+# its entry once reaped (a dead PID can be recycled by the OS, and a stale
+# entry could otherwise cause a later cleanup to kill an unrelated process).
+declare -a CHILD_PIDS=()
+
+ensure_run_tmpdir() {
+  if [[ -z "$RUN_TMPDIR" ]]; then
+    RUN_TMPDIR="$(mktemp -d)"
+  fi
+}
+
+# Kill only the child process groups this script actually backgrounded (see
+# CHILD_PIDS / set -m above), then remove RUN_TMPDIR (sweeping every per-CLI
+# sandbox in one shot) before exiting. Without this, Ctrl-C/SIGTERM would
+# leak running children and their /tmp/tmp.XXXX sandboxes, because a
+# foreground child blocks this trap from running until the child itself
+# exits.
+#
+# This intentionally does NOT signal process group 0 (this script's own
+# inherited group). When run-model.sh is invoked non-interactively — from
+# another script, an agent harness, or CI — there is no job control at the
+# call site, so this script shares its PARENT's process group. A `kill 0`
+# there signals the parent orchestrator and any unrelated sibling processes,
+# not just this script's own children. Targeting only the tracked child PIDs
+# (as their own process groups, via set -m) avoids that entirely.
+#
+# `trap '' INT TERM EXIT` is the first thing this does, before killing
+# anything. Without disarming the traps first, a signal delivered while this
+# handler is running could re-enter it (e.g. via the other trap), which
+# would run to completion and `exit 143` before the original INT call's
+# `exit 130` is ever reached. Disarming first makes the handler non-reentrant
+# and preserves the originally-intended exit code.
+cleanup_and_exit() {
+  local code="$1"
+  trap '' INT TERM EXIT
+  local p
+  for p in "${CHILD_PIDS[@]-}"; do
+    [[ -n "$p" ]] || continue
+    kill -TERM -"$p" 2>/dev/null || true
+  done
+  if [[ -n "$RUN_TMPDIR" ]]; then
+    rm -rf "$RUN_TMPDIR"
+    RUN_TMPDIR=""
+  fi
+  exit "$code"
+}
+trap 'cleanup_and_exit 130' INT
+trap 'cleanup_and_exit 143' TERM
+trap 'rm -rf "$RUN_TMPDIR"' EXIT
+
+# run-model.sh — dispatcher that normalizes three external agentic CLIs
+# (opencode, cursor-agent, kiro-cli) behind one stable interface.
+#
+# See -h/--help for usage.
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+CLIS=(opencode cursor-agent kiro-cli)
+DEFAULT_TIMEOUT=120
+# Cap on --context file size (bytes). Prevents silently ballooning the prompt
+# sent to a third-party CLI; enforced instead of silently truncating so the
+# user always knows exactly what was (or wasn't) sent.
+CONTEXT_MAX_BYTES=262144
+GLOBAL_CONFIG="${HOME}/.claude/skills/external-model/config"
+
+# Repo-root resolution: anchor per-repo config and --write cwd at the git
+# repo root when inside one, otherwise at the user's PWD. This way a
+# `cd src/ && run-model.sh` still finds ./.claude/external-model.config at
+# the repo root, and --write still edits files in the real repo, not a
+# subdir the agent happened to be in.
+repo_root() {
+  git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD"
+}
+REPO_ROOT="$(repo_root)"
+REPO_CONFIG="${REPO_ROOT}/.claude/external-model.config"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+err() { printf '%s\n' "$*" >&2; }
+die() { err "$*"; exit 1; }
+
+# Warnings are emitted to stderr for risky operations (--write, --context).
+# Set NO_WARN=1 (via --no-warn) to suppress them in automation.
+warn() {
+  if [[ "${NO_WARN:-0}" -eq 0 ]]; then
+    err "$*"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+run-model.sh — run a prompt through an external AI CLI (opencode, cursor-agent, kiro-cli)
+
+USAGE
+  run-model.sh [options] "prompt"          run a prompt (prompt may also come from stdin)
+  run-model.sh detect                      list installed CLIs (command -v only)
+  run-model.sh config show                 print resolved default cli/model and its source
+  run-model.sh show                        alias for 'config show'
+  run-model.sh config set --cli X [--model M]
+                                           write GLOBAL default; --cli without --model clears MODEL
+  run-model.sh set --cli X [--model M]     alias for 'config set'
+
+OPTIONS
+  --cli <name>       force CLI: opencode | cursor-agent | kiro-cli
+  --model <name>     force model (passed to the CLI; omitted -> CLI default)
+  --write            run in the real repo cwd and allow file edits (trust/force flag)
+  --all              fan out to ALL installed CLIs, forced read-only, side-by-side
+                     (each CLI uses its own default model; --model is not forwarded)
+  --dry-run          print resolved command/cwd/timeout instead of running
+  --context <file>   read file and prepend contents to prompt (use - for stdin)
+  --timeout <secs>   per-invocation timeout (default 120; env EXTERNAL_MODEL_TIMEOUT)
+  --no-warn          suppress trust/content warnings on stderr
+  -h, --help         this help
+
+RESOLUTION PRECEDENCE (highest first)
+  --cli/--model flags
+  repo config   <repo-root>/.claude/external-model.config   (read from git root, falls back to PWD)
+  global config ~/.claude/skills/external-model/config
+  the single installed CLI (if exactly one)
+  otherwise: error listing detected CLIs, asking for --cli
+
+SAFETY & TRUST
+  Default mode is read-only: the CLI runs inside a throwaway temp dir, so it
+  cannot mutate the real repo regardless of its own flags. --write runs in the
+  repo cwd and passes the CLI's trust/force flag, giving the external model the
+  ability to edit files. Prompts and any --context file contents are sent to
+  the third-party CLI/model. Use --no-warn to suppress these warnings.
+
+ENV
+  EXTERNAL_MODEL_TIMEOUT   default timeout in seconds
+  EXTERNAL_MODEL_DRYRUN=1  print the resolved command/cwd/timeout instead of running
+  KIRO_API_KEY             required by kiro-cli
+EOF
+}
+
+is_installed() { command -v "$1" >/dev/null 2>&1; }
+
+installed_clis() {
+  local c
+  for c in "${CLIS[@]}"; do
+    if is_installed "$c"; then printf '%s\n' "$c"; fi
+  done
+}
+
+# Safe config read: never `source`. Read only known KEY= lines, first match wins.
+# $1 = file, $2 = KEY -> prints value (may be empty / absent)
+#
+# Format: lines of `KEY=VALUE`. Required `v=1` header (older configs without
+# `v=` are tolerated as v1 for back-compat). Unknown keys are ignored. If
+# `v=` is present and != 1, this function prints nothing AND sets the
+# caller's CONFIG_VERSION_ERROR to a non-empty diagnostic.
+CONFIG_VERSION_ERROR=""
+
+# Same side-channel pattern as CONFIG_VERSION_ERROR, for a config file's
+# CLI= value naming something outside CLIS[]. Parse-time `--cli` is already
+# validated (see the ARG_CLI case below); a config-sourced CLI value was not,
+# so a typo there used to surface only much later, deep inside build_cmd, as
+# a confusing "internal: unknown cli" error. validate_config_cli() must be
+# called directly (never through a `$(...)` subshell) so this side effect is
+# visible to the caller — same reason CONFIG_VERSION_ERROR pre-scans run
+# outside command substitution below.
+CONFIG_CLI_ERROR=""
+validate_config_cli() {
+  local file="$1" cli
+  cli="$(config_get "$file" CLI)"
+  [[ -n "$cli" ]] || return 0
+  case "$cli" in
+    opencode|cursor-agent|kiro-cli) ;;
+    *) CONFIG_CLI_ERROR="config $file sets CLI=$cli, which is not a known CLI (valid: opencode, cursor-agent, kiro-cli)" ;;
+  esac
+}
+
+config_get() {
+  local file="$1" key="$2" line val
+  [[ -f "$file" ]] || return 0
+  # First pass: detect version if explicitly set.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in
+      v=*)
+        val="${line#*=}"
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        if [[ "$val" != "1" ]]; then
+          CONFIG_VERSION_ERROR="config $file declares v=$val; this build only understands v=1"
+          return 0
+        fi
+        ;;
+    esac
+  done <"$file"
+  # Second pass: read the requested key.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in
+      "${key}="*)
+        val="${line#*=}"
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        val="${val%\"}"; val="${val#\"}"
+        val="${val%\'}"; val="${val#\'}"
+        printf '%s' "$val"
+        return 0
+        ;;
+    esac
+  done <"$file"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+ARG_CLI=""
+ARG_MODEL=""
+ARG_MODEL_SET=0
+WRITE=0
+ALL=0
+NO_WARN=0
+TIMEOUT="${EXTERNAL_MODEL_TIMEOUT:-$DEFAULT_TIMEOUT}"
+PROMPT=""
+PROMPT_SET=0
+SUBCMD=""          # detect | config
+CONFIG_ACTION=""   # show | set
+CONTEXT_FILE=""
+
+# First, peel off subcommands when they appear as the first token.
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    detect)
+      SUBCMD="detect"; shift ;;
+    config)
+      SUBCMD="config"; shift
+      [[ $# -gt 0 ]] || die "config: expected 'show' or 'set'"
+      CONFIG_ACTION="$1"; shift
+      case "$CONFIG_ACTION" in show|set) ;; *) die "config: unknown action '$CONFIG_ACTION' (use show|set)";; esac
+      ;;
+    set|show)
+      # Bare aliases for `config set` / `config show`. Prevents an agent that
+      # translates the docs literally (`run-model.sh set ...`, `run-model.sh
+      # show`) from accidentally running a live model with the prompt "set"/"show".
+      SUBCMD="config"; CONFIG_ACTION="$1"; shift ;;
+    -h|--help)
+      usage; exit 0 ;;
+  esac
+fi
+
+# Parse remaining flags/positionals.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cli)     [[ $# -ge 2 ]] || die "--cli requires a value"; ARG_CLI="$2"; shift 2 ;;
+    --model)   [[ $# -ge 2 ]] || die "--model requires a value"; ARG_MODEL="$2"; ARG_MODEL_SET=1; shift 2 ;;
+    --write)   WRITE=1; shift ;;
+    --all)     ALL=1; shift ;;
+    --context) [[ $# -ge 2 ]] || die "--context requires a value"; CONTEXT_FILE="$2"; shift 2 ;;
+    --dry-run) export EXTERNAL_MODEL_DRYRUN=1; shift ;;
+    --no-warn) NO_WARN=1; shift ;;
+    --timeout) [[ $# -ge 2 ]] || die "--timeout requires a value"; TIMEOUT="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --)        shift; if [[ $# -gt 0 ]]; then PROMPT="$1"; PROMPT_SET=1; shift; fi ;;
+    -*)
+      # First positional argument that happens to start with '-' is the prompt,
+      # not an unknown option. The child-CLI command already uses `--` to stop
+      # option parsing, but the dispatcher itself must accept the prompt first.
+      if [[ $PROMPT_SET -eq 0 ]]; then
+        PROMPT="$1"; PROMPT_SET=1; shift
+      else
+        die "unknown option: $1"
+      fi
+      ;;
+    *)
+      if [[ $PROMPT_SET -eq 0 ]]; then PROMPT="$1"; PROMPT_SET=1; shift
+      else die "unexpected extra argument: $1"; fi
+      ;;
+  esac
+done
+
+# Validate --cli value early if provided.
+if [[ -n "$ARG_CLI" ]]; then
+  case "$ARG_CLI" in
+    opencode|cursor-agent|kiro-cli) ;;
+    *) die "unknown --cli '$ARG_CLI' (valid: opencode, cursor-agent, kiro-cli)";;
+  esac
+fi
+
+# Numeric timeout sanity.
+if [[ -n "$TIMEOUT" && ! "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+  die "--timeout must be a positive integer (got '$TIMEOUT')"
+fi
+
+# ---------------------------------------------------------------------------
+# Subcommand: detect
+# ---------------------------------------------------------------------------
+if [[ "$SUBCMD" == "detect" ]]; then
+  found=0
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    printf '%s\n' "$c"
+    found=1
+  done < <(installed_clis)
+  if [[ $found -eq 0 ]]; then
+    err "no external CLIs installed (looked for: ${CLIS[*]})"
+    exit 1
+  fi
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Subcommand: config
+# ---------------------------------------------------------------------------
+# Field separator for resolve_default output: a non-whitespace char so that
+# `read` preserves empty fields (whitespace IFS like \t collapses them).
+RD_SEP=$'\x1f'
+
+resolve_default() {
+  # Prints "CLI<SEP>MODEL<SEP>SOURCE". MODEL may be empty.
+  local cli model
+  if [[ -f "$REPO_CONFIG" ]]; then
+    cli="$(config_get "$REPO_CONFIG" CLI)"
+    if [[ -n "$cli" ]]; then
+      model="$(config_get "$REPO_CONFIG" MODEL)"
+      printf '%s%s%s%s%s\n' "$cli" "$RD_SEP" "$model" "$RD_SEP" "repo config ($REPO_CONFIG)"
+      return 0
+    fi
+  fi
+  if [[ -f "$GLOBAL_CONFIG" ]]; then
+    cli="$(config_get "$GLOBAL_CONFIG" CLI)"
+    if [[ -n "$cli" ]]; then
+      model="$(config_get "$GLOBAL_CONFIG" MODEL)"
+      printf '%s%s%s%s%s\n' "$cli" "$RD_SEP" "$model" "$RD_SEP" "global config ($GLOBAL_CONFIG)"
+      return 0
+    fi
+  fi
+  # single installed CLI?
+  local -a list=()
+  local c
+  while IFS= read -r c; do
+    list+=("$c")
+  done < <(installed_clis)
+  if [[ "${#list[@]}" -eq 1 ]]; then
+    printf '%s%s%s%s%s\n' "${list[0]}" "$RD_SEP" "" "$RD_SEP" "only installed CLI"
+    return 0
+  fi
+  return 1
+}
+
+if [[ "$SUBCMD" == "config" ]]; then
+  case "$CONFIG_ACTION" in
+    show)
+      # Pre-scan GLOBAL/REPO configs for an explicit bad version. The check
+      # must happen in the current shell (not a `$(...)` subshell) so the
+      # CONFIG_VERSION_ERROR side effect from config_get is visible here.
+      config_get "$GLOBAL_CONFIG" v >/dev/null
+      [[ -z "$CONFIG_VERSION_ERROR" ]] && config_get "$REPO_CONFIG" v >/dev/null
+      if [[ -n "$CONFIG_VERSION_ERROR" ]]; then
+        die "$CONFIG_VERSION_ERROR"
+      fi
+      # Same pre-scan for a config CLI= value outside CLIS[]; see
+      # validate_config_cli's comment for why this must also run directly,
+      # not inside resolve_default's `$(...)` capture below.
+      validate_config_cli "$GLOBAL_CONFIG"
+      [[ -z "$CONFIG_CLI_ERROR" ]] && validate_config_cli "$REPO_CONFIG"
+      [[ -z "$CONFIG_CLI_ERROR" ]] || die "$CONFIG_CLI_ERROR"
+      if out="$(resolve_default)"; then
+        IFS="$RD_SEP" read -r r_cli r_model r_src <<<"$out"
+        printf 'cli:    %s\n' "$r_cli"
+        if [[ -n "$r_model" ]]; then printf 'model:  %s\n' "$r_model"; else printf 'model:  (CLI default)\n'; fi
+        printf 'source: %s\n' "$r_src"
+        # A config can name a CLI that is no longer installed. Flag it so the
+        # next bare run does not fail at exec with a confusing "command not
+        # found"; the source line stays accurate, the warning explains why
+        # the resolution will not actually succeed.
+        if ! is_installed "$r_cli"; then
+          err "warning: '$r_cli' is configured but not installed; a bare run will fail. Installed: $(installed_clis | tr '\n' ' ')"
+        fi
+      else
+        printf 'cli:    (none resolved)\n'
+        printf 'model:  (CLI default)\n'
+        printf 'source: no config; installed: %s\n' "$(installed_clis | tr '\n' ' ')"
+      fi
+      exit 0
+      ;;
+    set)
+      [[ -n "$ARG_CLI" ]] || die "config set: --cli is required"
+      [[ $PROMPT_SET -eq 0 ]] || die "config set: unexpected argument '$PROMPT' (config set takes only --cli and --model)"
+      if [[ "$ARG_CLI" == "kiro-cli" && -z "${KIRO_API_KEY:-}" ]]; then
+        err "hint: kiro-cli requires KIRO_API_KEY; it is not set in the environment."
+      fi
+      mkdir -p "$(dirname "$GLOBAL_CONFIG")"
+      {
+        printf 'v=1\n'
+        printf 'CLI=%s\n' "$ARG_CLI"
+        if [[ $ARG_MODEL_SET -eq 1 && -n "$ARG_MODEL" ]]; then
+          printf 'MODEL=%s\n' "$ARG_MODEL"
+        fi
+      } >"$GLOBAL_CONFIG"
+      if [[ $ARG_MODEL_SET -eq 1 && -n "$ARG_MODEL" ]]; then
+        printf 'wrote global default: CLI=%s MODEL=%s -> %s\n' "$ARG_CLI" "$ARG_MODEL" "$GLOBAL_CONFIG"
+      else
+        printf 'wrote global default: CLI=%s (model cleared) -> %s\n' "$ARG_CLI" "$GLOBAL_CONFIG"
+      fi
+      exit 0
+      ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------
+# Prompt acquisition (run path)
+# ---------------------------------------------------------------------------
+if [[ "$CONTEXT_FILE" == "-" && $PROMPT_SET -eq 0 && ! -t 0 ]]; then
+  die "cannot use --context - when prompt also comes from stdin; pass prompt as argument"
+fi
+if [[ $PROMPT_SET -eq 0 ]]; then
+  if [[ ! -t 0 ]]; then
+    PROMPT="$(cat)"
+    PROMPT_SET=1
+  fi
+fi
+if [[ $PROMPT_SET -eq 0 || -z "$PROMPT" ]]; then
+  die "no prompt provided (pass as an argument or on stdin)"
+fi
+
+# ---------------------------------------------------------------------------
+# Context injection
+# ---------------------------------------------------------------------------
+if [[ -n "$CONTEXT_FILE" ]]; then
+  ctx=""
+  if [[ "$CONTEXT_FILE" == "-" ]]; then
+    if [[ ! -t 0 ]]; then
+      ctx="$(cat)"
+      # Same cap as the file path below: refuse rather than silently
+      # truncate, so an oversized stdin dump doesn't balloon the prompt
+      # without the user knowing.
+      ctx_size="$(printf '%s' "$ctx" | wc -c | tr -d '[:space:]')"
+      if [[ "$ctx_size" -gt "$CONTEXT_MAX_BYTES" ]]; then
+        die "--context - stdin is too large ($ctx_size bytes; limit is $CONTEXT_MAX_BYTES bytes)"
+      fi
+    else
+      die "--context - requires data on stdin"
+    fi
+  else
+    # Reject symlinks outright rather than silently following them. A
+    # filename in a shared/writable dir (e.g. /tmp) could be swapped for a
+    # symlink pointing at an unintended file, forwarding its contents to a
+    # third-party model without the caller realizing. Checked before -e/-f
+    # (which both follow symlinks) so a dangling symlink is also caught here
+    # with a clear message instead of falling through to "not found".
+    # `readlink` (no -f; not available in bash 3.2's macOS toolchain) shows
+    # the one-level target so the indirection is disclosed even when refused.
+    if [[ -L "$CONTEXT_FILE" ]]; then
+      die "--context refuses to follow symlinks: $CONTEXT_FILE -> $(readlink "$CONTEXT_FILE" 2>/dev/null || printf '<unresolved>')"
+    fi
+    [[ -e "$CONTEXT_FILE" ]] || die "--context file not found: $CONTEXT_FILE"
+    [[ -f "$CONTEXT_FILE" ]] || die "--context file is not a regular file: $CONTEXT_FILE"
+    [[ -r "$CONTEXT_FILE" ]] || die "--context file not readable: $CONTEXT_FILE"
+    ctx_size="$(wc -c < "$CONTEXT_FILE" | tr -d '[:space:]')"
+    if [[ "$ctx_size" -gt "$CONTEXT_MAX_BYTES" ]]; then
+      die "--context file is too large: $CONTEXT_FILE ($ctx_size bytes; limit is $CONTEXT_MAX_BYTES bytes)"
+    fi
+    ctx="$(<"$CONTEXT_FILE")"
+  fi
+  if [[ -n "$ctx" ]]; then
+    PROMPT="${ctx}
+
+---
+
+${PROMPT}"
+  fi
+  warn "warning: --context forwards the contents of '$CONTEXT_FILE' to an external model."
+fi
+
+# ---------------------------------------------------------------------------
+# Timeout wrapper resolution
+# ---------------------------------------------------------------------------
+TIMEOUT_BIN=""
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+fi
+WARNED_NO_TIMEOUT=0
+warn_no_timeout_once() {
+  if [[ $WARNED_NO_TIMEOUT -eq 0 ]]; then
+    err "warning: no 'timeout'/'gtimeout' found; running without a timeout"
+    WARNED_NO_TIMEOUT=1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Build the CLI command array for a given cli + model + write-mode.
+# Sets global array CMD=( ... ). The prompt is appended as the LAST element of
+# CMD (a positional argv arg) for every CLI — all three take the prompt as a
+# positional argument and break if it is piped on stdin. An argv array element
+# is immune to word-splitting / glob / $()/backtick expansion, so this stays
+# injection-safe.
+# ---------------------------------------------------------------------------
+build_cmd() {
+  local cli="$1" model="$2" write="$3"
+  CMD=()
+  case "$cli" in
+    opencode)
+      # opencode has no headless read-only flag; read-only safety comes from
+      # the temp-dir sandbox, not from a CLI flag.
+      CMD=(opencode run)
+      if [[ -n "$model" ]]; then CMD+=(-m "$model"); fi
+      ;;
+    cursor-agent)
+      CMD=(cursor-agent -p --output-format text)
+      if [[ -n "$model" ]]; then CMD+=(-m "$model"); fi
+      if [[ "$write" -eq 1 ]]; then
+        # --force already satisfies the workspace-trust gate (see below).
+        CMD+=(--force)
+      else
+        # Since the cursor-agent January 2026 release, non-interactive runs
+        # in an untrusted workspace fail unless --trust or --force is passed
+        # (https://cursor.com/docs/cli/changelog). The dispatcher's read-only
+        # mode always runs inside a fresh mktemp -d sandbox, which is an
+        # untrusted workspace on every invocation, so --trust is required
+        # here to avoid a hard failure instead of a clean read-only run.
+        CMD+=(--trust)
+      fi
+      ;;
+    kiro-cli)
+      CMD=(kiro-cli chat --no-interactive)
+      # kiro-cli takes no model flag in this mapping.
+      if [[ "$write" -eq 1 ]]; then CMD+=(--trust-all-tools); fi
+      ;;
+    *)
+      die "internal: unknown cli '$cli'"
+      ;;
+  esac
+  # End-of-options delimiter prevents a prompt starting with '-' from being
+  # parsed as a CLI flag; the prompt is always the final positional argument.
+  CMD+=(-- "$PROMPT")
+}
+
+# ---------------------------------------------------------------------------
+# Run one CLI. Args: cli model write
+# Honors EXTERNAL_MODEL_DRYRUN, sandbox isolation, and timeout.
+# Returns the CLI's exit code (or 0 on dry-run).
+# ---------------------------------------------------------------------------
+run_one() {
+  local cli="$1" model="$2" write="$3"
+  local cwd_kind
+
+  if [[ "$write" -eq 1 ]]; then
+    cwd_kind="repo:$REPO_ROOT"
+    warn "warning: --write allows $cli to edit files in the repo and bypasses approval prompts; you are trusting a third-party binary."
+  else
+    cwd_kind="sandbox(temp-dir)"
+  fi
+
+  # kiro env hint (don't block; let the real error surface, but help the caller).
+  # Only on real runs — a dry-run shouldn't emit env warnings. Dry-run is
+  # ONLY EXTERNAL_MODEL_DRYRUN == "1" (see build_cmd/timeout-wrapper checks
+  # below); any other truthy-looking value (e.g. "true") is a REAL run.
+  if [[ "${EXTERNAL_MODEL_DRYRUN:-}" != "1" && "$cli" == "kiro-cli" && -z "${KIRO_API_KEY:-}" ]]; then
+    err "hint: kiro-cli requires KIRO_API_KEY; it is not set in the environment."
+  fi
+
+  build_cmd "$cli" "$model" "$write"
+
+  # Build the full command. In dry-run, omit the `timeout` wrapper — it's a
+  # runtime safeguard, not part of the command semantics, and including it
+  # would make dry-run output depend on whether the host has GNU `timeout`
+  # installed (Linux yes, macOS no). On real runs, wrap when both TIMEOUT_BIN
+  # and TIMEOUT are set.
+  #
+  # Dry-run detection is `== "1"` everywhere in this function (matches the
+  # dry-run-and-exit branch below) — NOT `-z`. `-z` treats ANY non-empty
+  # value (e.g. EXTERNAL_MODEL_DRYRUN=true) as "is a dry run", which would
+  # both skip the timeout wrapper AND suppress the no-timeout warning for a
+  # run that is actually about to execute the CLI for real and unbounded.
+  local full=()
+  if [[ "${EXTERNAL_MODEL_DRYRUN:-}" != "1" && -n "$TIMEOUT_BIN" && -n "$TIMEOUT" ]]; then
+    full=("$TIMEOUT_BIN" "${TIMEOUT}s" "${CMD[@]}")
+  else
+    if [[ -z "$TIMEOUT_BIN" && "${EXTERNAL_MODEL_DRYRUN:-}" != "1" ]]; then
+      warn_no_timeout_once
+    fi
+    full=("${CMD[@]}")
+  fi
+
+  if [[ "${EXTERNAL_MODEL_DRYRUN:-}" == "1" ]]; then
+    # Minimal, clearly-marked dry-run: print resolved cwd, timeout, command array.
+    local resolved_cwd
+    if [[ "$write" -eq 1 ]]; then resolved_cwd="$REPO_ROOT"; else resolved_cwd="<temp sandbox dir>"; fi
+    printf 'DRYRUN cli=%s mode=%s cwd=%s timeout=%s\n' \
+      "$cli" "$cwd_kind" "$resolved_cwd" "${TIMEOUT:-none}"
+    printf 'DRYRUN cmd:'
+    local a
+    for a in "${full[@]}"; do printf ' [%s]' "$a"; done
+    printf '\n'
+    return 0
+  fi
+
+  # Real run. The prompt is the final element of "${full[@]}" (an argv arg),
+  # never on stdin — all three CLIs take it positionally.
+  # --write runs from the repo root regardless of the invocation cwd, so a
+  # `cd src/ && run-model.sh --write` still edits files in the real repo,
+  # not a subdir the agent happened to be in (matches the dry-run report).
+  if [[ "$write" -eq 1 ]]; then
+    ( cd "$REPO_ROOT" && "${full[@]}" )
+  else
+    local sandbox rc job_pid
+    # Every sandbox nests under the single parent RUN_TMPDIR (created here on
+    # first use) instead of being its own top-level mktemp -d. That parent
+    # dir is known to the dispatcher's own (top-level-trap-owning) shell even
+    # when run_one itself executes inside a forked --all subshell, so the
+    # top-level INT/TERM trap can always find and remove it — see RUN_TMPDIR
+    # above. A local EXIT trap on the sandbox dir is kept too, belt and
+    # suspenders, for prompt cleanup on normal (non-signal) completion of
+    # this specific run, independent of when the rest of run_one finishes.
+    ensure_run_tmpdir
+    sandbox="$(TMPDIR="$RUN_TMPDIR" mktemp -d)"
+    trap 'rm -rf "$sandbox"' EXIT
+    # Run the CLI as a BACKGROUND job and `wait` on it (mirrors the --all
+    # fan-out path) rather than running it as a foreground command. A
+    # foreground child blocks bash from servicing signals until the child
+    # exits, so the top-level INT/TERM trap couldn't fire until the CLI
+    # finished on its own — leaking both the child and the sandbox dir on
+    # Ctrl-C/SIGTERM. `wait` on a background job, by contrast, is
+    # interrupted immediately when a trapped signal arrives, so the trap
+    # runs right away (see cleanup_and_exit at the top of this file), kills
+    # just this job's own process group (see CHILD_PIDS / set -m above —
+    # the child is included since it's part of that group), and removes
+    # RUN_TMPDIR (which contains $sandbox).
+    ( cd "$sandbox" && "${full[@]}" ) &
+    job_pid=$!
+    CHILD_PIDS+=("$job_pid")
+    rc=0
+    wait "$job_pid" || rc=$?
+    # Drop the reaped PID from CHILD_PIDS: it's no longer running, and a
+    # stale entry risks a later cleanup killing an unrelated process that
+    # happens to reuse this now-recycled PID.
+    CHILD_PIDS=("${CHILD_PIDS[@]/$job_pid}")
+    rm -rf "$sandbox"
+    trap 'rm -rf "$RUN_TMPDIR"' EXIT
+    return "$rc"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# --all : fan out to every installed CLI, forced read-only.
+# ---------------------------------------------------------------------------
+if [[ $ALL -eq 1 ]]; then
+  if [[ $WRITE -eq 1 ]]; then
+    err "note: --all is forced read-only; --write is ignored"
+  fi
+  if [[ $ARG_MODEL_SET -eq 1 ]]; then
+    err "note: --all ignores --model; each CLI uses its own default"
+  fi
+  any=0
+  cli_list=()
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    cli_list+=("$c")
+    any=1
+  done < <(installed_clis)
+  if [[ $any -eq 0 ]]; then
+    die "no external CLIs installed (looked for: ${CLIS[*]})"
+  fi
+
+  # Emit the no-timeout warning once, here, in the parent before the fanout
+  # loop launches children. Each child runs run_one in its own forked
+  # subshell (via `&`), so WARNED_NO_TIMEOUT=1 set here is inherited by copy
+  # at fork time and the children's own warn_no_timeout_once calls become
+  # no-ops — instead of one warning per installed CLI.
+  if [[ -z "$TIMEOUT_BIN" && "${EXTERNAL_MODEL_DRYRUN:-}" != "1" ]]; then
+    warn_no_timeout_once
+  fi
+
+  # Install the --all-specific per-CLI stdout/err cleanup trap BEFORE the
+  # fanout, so a signal arriving between fork iterations still has the
+  # right handler. The trap string is re-evaluated on every signal, so it
+  # sees the cli_outf/cli_errf/cli_pids arrays' state at fire time — entries
+  # set so far are cleaned/killed, unset entries are no-ops (`rm -f ""`, and
+  # the `[[ -z ... ]]` guard skips empty cli_pids slots). Every array
+  # reference uses the `[@]-` form (not bare `[@]`) because under bash 3.2's
+  # `set -u`, `"${arr[@]}"` on a still-empty/undeclared array throws
+  # "unbound variable" and aborts the rest of the trap string outright —
+  # `"${arr[@]-}"` degrades to nothing instead, so the trap always reaches
+  # cleanup_and_exit. This can fire before `declare -a cli_pids=() ...`
+  # below has even run (a signal between fork iterations), so the guard
+  # matters even on the very first array reference.
+  #
+  # The trap kills each tracked per-CLI process group directly (cli_pids),
+  # then delegates to cleanup_and_exit for the RUN_TMPDIR sweep + exit —
+  # cleanup_and_exit itself only knows about CHILD_PIDS (the single-run
+  # path's own job), not cli_pids, so --all must kill its own children here
+  # rather than relying on cleanup_and_exit to do it. See cleanup_and_exit's
+  # comment at the top of this file for why this never signals process
+  # group 0 (this script's own inherited group): in a non-interactive
+  # invocation that group is shared with the parent orchestrator and any
+  # unrelated siblings.
+  trap 'for f in "${cli_outf[@]-}" "${cli_errf[@]-}"; do rm -f "$f"; done; for p in "${cli_pids[@]-}"; do [[ -z "$p" ]] || kill -TERM -"$p" 2>/dev/null || true; done; cleanup_and_exit 130' INT
+  trap 'for f in "${cli_outf[@]-}" "${cli_errf[@]-}"; do rm -f "$f"; done; for p in "${cli_pids[@]-}"; do [[ -z "$p" ]] || kill -TERM -"$p" 2>/dev/null || true; done; cleanup_and_exit 143' TERM
+  declare -a cli_pids=() cli_outf=() cli_errf=() cli_starts=()
+  for i in "${!cli_list[@]}"; do
+    c="${cli_list[$i]}"
+    cli_outf[$i]="$(mktemp)"
+    cli_errf[$i]="$(mktemp)"
+    cli_starts[$i]=$SECONDS
+    run_one "$c" "" 0 >"${cli_outf[$i]}" 2>"${cli_errf[$i]}" &
+    cli_pids[$i]=$!
+  done
+
+  declare -a cli_rcs=() cli_elapsed=()
+  for i in "${!cli_list[@]}"; do
+    rc=0
+    wait "${cli_pids[$i]}" || rc=$?
+    cli_rcs[$i]=$rc
+    cli_elapsed[$i]=$(( SECONDS - ${cli_starts[$i]} ))
+    # Clear the reaped PID so the still-installed INT/TERM trap can't later
+    # kill an unrelated process that reused it (mirrors the single-run
+    # CHILD_PIDS prune; the trap's `[[ -z "$p" ]] || ...` skips empties).
+    cli_pids[$i]=""
+  done
+
+  for i in "${!cli_list[@]}"; do
+    c="${cli_list[$i]}"
+    printf -- '---- %s ----\n' "$c"
+    cat "${cli_outf[$i]}"
+    printf -- '---- %s done in %ds (exit %d) ----\n' "$c" "${cli_elapsed[$i]}" "${cli_rcs[$i]}"
+    if [[ ${cli_rcs[$i]} -ne 0 ]]; then
+      err "(${c} failed; stderr follows)"
+      if [[ -s "${cli_errf[$i]}" ]]; then
+        printf -- '---- %s stderr ----\n' "$c" >&2
+        cat "${cli_errf[$i]}" >&2
+        printf -- '---- end %s stderr ----\n' "$c" >&2
+      fi
+    fi
+    rm -f "${cli_outf[$i]}" "${cli_errf[$i]}"
+    printf '\n'
+  done
+  # Propagate worst exit code so CI/pipelines detect --all degradation.
+  max_rc=0
+  for i in "${!cli_list[@]}"; do
+    if [[ ${cli_rcs[$i]} -gt $max_rc ]]; then max_rc=${cli_rcs[$i]}; fi
+  done
+  exit "$max_rc"
+fi
+
+# ---------------------------------------------------------------------------
+# Single run: resolve cli + model per precedence.
+# ---------------------------------------------------------------------------
+RES_CLI=""
+RES_MODEL=""
+
+# Pre-scan GLOBAL/REPO configs for an explicit bad version BEFORE the
+# --cli/no-default-config branch below, so an explicit `--cli` can no longer
+# bypass the version gate. Must run in the current shell (not a `$(...)`
+# subshell) so the CONFIG_VERSION_ERROR side effect from config_get is
+# visible here. `--all` and `detect` exit earlier and are unaffected.
+config_get "$GLOBAL_CONFIG" v >/dev/null
+[[ -z "$CONFIG_VERSION_ERROR" ]] && config_get "$REPO_CONFIG" v >/dev/null
+[[ -z "$CONFIG_VERSION_ERROR" ]] || die "$CONFIG_VERSION_ERROR"
+
+# Pre-scan for a config CLI= value outside CLIS[] so a bare (no --cli) run
+# gets a clear error here instead of failing deep inside build_cmd with a
+# confusing "internal: unknown cli". Only when there's no explicit --cli:
+# with --cli the config's CLI= value is never consulted (see below), so a
+# stale/typo'd config CLI must not block an otherwise-valid explicit run.
+if [[ -z "$ARG_CLI" ]]; then
+  validate_config_cli "$GLOBAL_CONFIG"
+  [[ -z "$CONFIG_CLI_ERROR" ]] && validate_config_cli "$REPO_CONFIG"
+  [[ -z "$CONFIG_CLI_ERROR" ]] || die "$CONFIG_CLI_ERROR"
+fi
+
+if [[ -n "$ARG_CLI" ]]; then
+  RES_CLI="$ARG_CLI"
+  # model: explicit flag wins; otherwise leave empty (flags don't inherit config model here
+  # unless the same cli is the configured default — keep simple: explicit cli => explicit/none model).
+  if [[ $ARG_MODEL_SET -eq 1 ]]; then RES_MODEL="$ARG_MODEL"; fi
+else
+  if out="$(resolve_default)"; then
+    IFS="$RD_SEP" read -r RES_CLI RES_MODEL _src <<<"$out"
+  else
+    die "no default CLI resolved. Installed CLIs: $(installed_clis | tr '\n' ' ')
+Re-invoke with --cli <opencode|cursor-agent|kiro-cli>, or set a default with:
+  $(basename "$0") config set --cli <cli> [--model <model>]"
+  fi
+  # An explicit --model overrides the config model even when cli came from config.
+  if [[ $ARG_MODEL_SET -eq 1 ]]; then RES_MODEL="$ARG_MODEL"; fi
+fi
+
+[[ -n "$RES_CLI" ]] || die "could not resolve a CLI to run (use --cli)."
+
+# Warn regardless of where the model came from (explicit --model or a
+# config-sourced default) — kiro-cli headless drops it either way.
+if [[ "$RES_CLI" == "kiro-cli" && -n "$RES_MODEL" ]]; then
+  err "warning: kiro-cli headless has no model-select flag; --model '$RES_MODEL' will be ignored"
+fi
+
+run_one "$RES_CLI" "$RES_MODEL" "$WRITE"

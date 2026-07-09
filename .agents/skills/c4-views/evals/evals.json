@@ -1,0 +1,59 @@
+{
+  "skill_name": "c4-views",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "(structural) Verify references/notations.md carries L1–L3 Mermaid native C4 templates.",
+      "expected_output": "Three of C4Context, C4Container, C4Component each appear as a template start in references/notations.md.",
+      "files": [],
+      "assertions": [
+        "references/notations.md contains 'C4Context'",
+        "references/notations.md contains 'C4Container'",
+        "references/notations.md contains 'C4Component'"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "(structural) Verify references/notations.md carries a Structurizr DSL template.",
+      "expected_output": "A 'workspace {' block is present in references/notations.md.",
+      "files": [],
+      "assertions": [
+        "references/notations.md contains 'workspace {'"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "(structural) Verify references/notations.md carries C4-PlantUML templates for every defined level.",
+      "expected_output": "PlantUML !include directives for C4_Context, C4_Container, and C4_Component (and ideally Dynamic/Deployment) appear in references/notations.md.",
+      "files": [],
+      "assertions": [
+        "references/notations.md contains 'C4_Context.puml'",
+        "references/notations.md contains 'C4_Container.puml'",
+        "references/notations.md contains 'C4_Component.puml'"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "(structural) Verify references/review-rubric.md defines the full G1–G6 / E1–E9 / R1–R6 check alphabet.",
+      "expected_output": "Each of G1–G6, E1–E9, R1–R6 appears as a check id in references/review-rubric.md.",
+      "files": [],
+      "assertions": [
+        "references/review-rubric.md contains every G1..G6",
+        "references/review-rubric.md contains every E1..E9",
+        "references/review-rubric.md contains every R1..R6"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "(structural) Verify SKILL.md names all three reference files and mandates the L1+L2 default.",
+      "expected_output": "SKILL.md body references c4-method.md, notations.md, and review-rubric.md by filename, and contains the normative 'L1 + L2 by default' (or equivalent 'Produce L1 + L2') directive.",
+      "files": [],
+      "assertions": [
+        "SKILL.md names 'references/c4-method.md'",
+        "SKILL.md names 'references/notations.md'",
+        "SKILL.md names 'references/review-rubric.md'",
+        "SKILL.md mandates producing L1 + L2 by default"
+      ]
+    }
+  ]
+}

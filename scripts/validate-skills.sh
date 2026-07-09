@@ -95,6 +95,23 @@ while IFS= read -r -d '' skill_md; do
       skill_errors=$((skill_errors + 1))
     fi
 
+    # A single-line, unquoted description containing ": " (colon-space) is
+    # invalid YAML for strict parsers — GitHub renders SKILL.md frontmatter and
+    # errors ("mapping values are not allowed in this context"). Our own parser
+    # is lenient and accepts it, so guard against the class here. Quoted values
+    # ("/') and block scalars (|/>) may legitimately contain ": ".
+    raw_desc="$(sed -n '/^---$/,/^---$/p' "$skill_md" | grep -m1 '^description:')"
+    desc_val="${raw_desc#description:}"
+    desc_val="${desc_val# }"
+    case "$desc_val" in
+      '"'*|"'"*|'|'*|'>'*) : ;;  # quoted or block scalar — colons are safe
+      *': '*)
+        echo "FAIL $name: description has an unquoted ': ' — invalid YAML for strict parsers (e.g. GitHub); rephrase (use — ) or quote the value" >&2
+        ERRORS=$((ERRORS + 1))
+        skill_errors=$((skill_errors + 1))
+        ;;
+    esac
+
     # Trigger-phrase check is intentionally broad (8+ phrases, case-insensitive)
     # and a WARNING, not an error: false positives are fine, but a missing
     # trigger phrase means the model may never load the skill. Do not tighten

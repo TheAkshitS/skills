@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/TheAkshitS/skills/compare/v0.4.0...v0.5.0) (2026-07-09)
+
+
+### Features
+
+* multi-harness install (pi, Agent Skills spec) with drop-in mirrors ([a90b1f6](https://github.com/TheAkshitS/skills/commit/a90b1f68fad589d1786bbfeb09fd877009e4a0b8))
+* **validate-skills:** bidirectional mirror check, dup-name detection, portability ([9f82805](https://github.com/TheAkshitS/skills/commit/9f82805da4a70678d5cd91ceb67ec3ba80a420bc))
+
+
+### Bug Fixes
+
+* add trap cleanup and jq error guidance in install-pi.sh ([b17b00b](https://github.com/TheAkshitS/skills/commit/b17b00bb4658dc19f44230cf11febe1c7a3a61db))
+* **eval-triggers:** add missing trailing newline ([2386ee2](https://github.com/TheAkshitS/skills/commit/2386ee2ae17ffb5fd227fce12b6137ee17cfed3d))
+* **eval-triggers:** guard for-loops against empty array crash under set -u ([dc38c0d](https://github.com/TheAkshitS/skills/commit/dc38c0d9b5abb83f123966f45b126f4d40607957))
+* **external-model:** harden dispatcher signals, timeout, --context, config ([44e3c47](https://github.com/TheAkshitS/skills/commit/44e3c47a67eb33ae9c0f1e755dd0daea42982c57))
+* **external-model:** reject directories and oversized files for --context ([b02c28c](https://github.com/TheAkshitS/skills/commit/b02c28c73d37f15b3fbaf483d4294148f03d6374))
+* **link-skills:** reconcile symlink-guard test with skip-one design; guard empty SKILL_SRCS ([f9661fd](https://github.com/TheAkshitS/skills/commit/f9661fd322ee898e581a497f220563a5caa350a1))
+* **validate-skills:** mirror check honors bucketed paths; count desc chars not bytes ([25d8b9f](https://github.com/TheAkshitS/skills/commit/25d8b9f50976c8ce0df79f9b694cc3b82a1a927a))
+
 ## [0.4.0](https://github.com/TheAkshitS/skills/compare/v0.3.0...v0.4.0) (2026-07-06)
 
 

@@ -10,6 +10,18 @@ SKILL_COUNT=0
 ACTIVE_SKILLS=()
 ACTIVE_PATHS=()
 
+# Timeout wrapper for per-skill eval runners (mirrors the gtimeout/timeout
+# detection pattern in skills/external-model/scripts/run-model.sh): prefer
+# GNU 'timeout', fall back to macOS's 'gtimeout' (coreutils via brew), else
+# run unwrapped so a missing binary never blocks validation.
+TIMEOUT_BIN=""
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+fi
+EVAL_TIMEOUT_SECS=60
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "error: python3 is required to parse frontmatter" >&2
   exit 1
@@ -25,7 +37,7 @@ fi
 while IFS= read -r -d '' skill_md; do
   src="$(dirname "$skill_md")"
   name="$(basename "$src")"
-  rel_path="${src#$REPO/}"
+  rel_path="${src#"$REPO"/}"
 
   SKILL_COUNT=$((SKILL_COUNT + 1))
   ACTIVE_SKILLS+=("$name")
@@ -55,7 +67,7 @@ while IFS= read -r -d '' skill_md; do
     echo "FAIL $name: missing 'name' in frontmatter" >&2
     ERRORS=$((ERRORS + 1))
     skill_errors=$((skill_errors + 1))
-  elif ! echo "$fm_name" | grep -qE '^[a-z0-9](-?[a-z0-9])*$'; then
+  elif ! printf '%s\n' "$fm_name" | grep -qE '^[a-z0-9](-?[a-z0-9])*$'; then
     echo "FAIL $name: name '$fm_name' must be kebab-case (lowercase letters, digits, optional single hyphens)" >&2
     ERRORS=$((ERRORS + 1))
     skill_errors=$((skill_errors + 1))
@@ -71,11 +83,12 @@ while IFS= read -r -d '' skill_md; do
     ERRORS=$((ERRORS + 1))
     skill_errors=$((skill_errors + 1))
   else
-    # Count characters, not bytes: bash's ${#var} is locale-dependent and
-    # counts bytes under a C/POSIX locale, which would falsely flag multibyte
-    # UTF-8 descriptions (em dashes, accents, non-Latin scripts) as over the
-    # spec's 1024-*character* limit. python3 is already a hard dependency here.
-    desc_len="$(python3 -c 'import sys; print(len(sys.argv[1]))' "$fm_desc")"
+    # Count characters, not bytes: jq's `length` on a string counts Unicode
+    # codepoints, which matches the spec's 1024-*character* limit even for
+    # multibyte UTF-8 descriptions (em dashes, accents, non-Latin scripts).
+    # $parsed is already-parsed JSON from the frontmatter parser above, so
+    # this reuses it instead of spawning a second python3 process per skill.
+    desc_len="$(printf '%s' "$parsed" | jq -r '.data.description | length')"
     if [ "$desc_len" -gt 1024 ]; then
       echo "FAIL $name: description too long ($desc_len chars, max 1024)" >&2
       ERRORS=$((ERRORS + 1))
@@ -87,7 +100,7 @@ while IFS= read -r -d '' skill_md; do
     # trigger phrase means the model may never load the skill. Do not tighten
     # this regex without updating docs/skill-authoring.md and the template's
     # "Use when..." guidance in tandem.
-    if ! echo "$fm_desc" | grep -qiE '(use when|trigger|activate|invoke|run when|user says|user wants|user needs|mentions|asks for)'; then
+    if ! printf '%s\n' "$fm_desc" | grep -qiE '(use when|trigger|activate|invoke|run when|user says|user wants|user needs|mentions|asks for)'; then
       echo "WARN $name: description may lack trigger phrases (e.g. 'Use when...')" >&2
       WARNINGS=$((WARNINGS + 1))
     fi
@@ -104,13 +117,37 @@ done < <(find "$SKILLS_DIR" -name SKILL.md \
   -not -path '*/personal/*' \
   -print0)
 
+# --- Check for duplicate skill names (leaf-name collisions) ---
+# link-skills.sh links skills into a flat directory by basename, so two
+# bucketed skills that share a leaf name (skills/foo/x and skills/bar/x)
+# would silently collide there even though `find` happily discovers both.
+# `${ACTIVE_SKILLS[@]+"${ACTIVE_SKILLS[@]}"}` guards against bash 3.2's
+# "unbound variable" error on an empty array under `set -u`.
+dup_names="$(printf '%s\n' ${ACTIVE_SKILLS[@]+"${ACTIVE_SKILLS[@]}"} | sort | uniq -d)"
+if [ -n "$dup_names" ]; then
+  while IFS= read -r dup; do
+    [ -z "$dup" ] && continue
+    echo "FAIL $dup: duplicate skill name — multiple skills share this leaf name (link-skills.sh links by basename)" >&2
+    ERRORS=$((ERRORS + 1))
+  done <<< "$dup_names"
+fi
+
 # --- Run per-skill eval graders (generic) ---
 # Any active skill that ships an executable evals/run.sh gets it run here; a
 # non-zero exit counts as an error. The SKILL.md dir is the skill source dir.
+if [ -z "$TIMEOUT_BIN" ]; then
+  echo "note: no 'timeout'/'gtimeout' on PATH — per-skill evals run without a timeout" >&2
+fi
 for idx in "${!ACTIVE_PATHS[@]}"; do
   eval_runner="$REPO/${ACTIVE_PATHS[$idx]}/evals/run.sh"
   if [ -x "$eval_runner" ]; then
-    if out="$("$eval_runner" 2>&1)"; then
+    if [ -n "$TIMEOUT_BIN" ]; then
+      runner_cmd=("$TIMEOUT_BIN" "${EVAL_TIMEOUT_SECS}s" "$eval_runner")
+    else
+      runner_cmd=("$eval_runner")
+    fi
+    # A hanging eval must not stall validation forever.
+    if out="$("${runner_cmd[@]}" 2>&1)"; then
       echo "OK   ${ACTIVE_SKILLS[$idx]}: evals"
     else
       printf 'FAIL %s: evals\n' "${ACTIVE_SKILLS[$idx]}" >&2
@@ -127,12 +164,9 @@ done
 # LLM; this is the structural prerequisite. Skills with no evals/triggers.json
 # are skipped silently (the file is recommended, not required).
 if [ -x "$REPO/scripts/eval-triggers.sh" ]; then
-  if out="$("$REPO/scripts/eval-triggers.sh" 2>&1)"; then
-    :   # eval-triggers.sh prints its own per-skill OK lines
-  else
-    printf '%s\n' "$out" >&2
-    ERRORS=$((ERRORS + 1))
-  fi
+  # Run uncaptured so its per-skill OK/FAIL lines actually surface, on
+  # success and failure alike, instead of being swallowed on the happy path.
+  "$REPO/scripts/eval-triggers.sh" || ERRORS=$((ERRORS + 1))
 fi
 
 # --- skills-ref (optional) ---
@@ -186,8 +220,13 @@ fi
 # --- Check in-repo distribution mirrors ---
 # .claude/skills/ and .agents/skills/ are committed copies that let the repo
 # work as a drop-in folder for Claude Code + pi + opencode. Each active
-# skill must have a copy in both, and the SKILL.md must match. Drift here
-# means a user who clones the repo gets stale skills. Fix: run
+# skill must have a byte-for-byte (modulo trailing whitespace) copy in both,
+# and every mirror entry must trace back to a skills/ source — no orphans
+# left behind by a skill that was deleted from skills/ without re-running
+# the sync. Since committing mirrors now depends on this check, drift and
+# orphans are ERRORS (not warnings) so CI actually fails on them. Only a
+# wholly absent mirror directory stays a WARNING, so a fresh checkout before
+# the first sync doesn't hard-fail local dev. Fix: run
 # scripts/sync-copied-skills.sh.
 for mirror_rel in .claude/skills .agents/skills; do
   mirror_abs="$REPO/$mirror_rel"
@@ -197,6 +236,10 @@ for mirror_rel in .claude/skills .agents/skills; do
     continue
   fi
 
+  # Forward direction: every active skills/ source has a matching mirror
+  # copy, and the copy's full contents (whitespace-normalized) match the
+  # source. Compares the whole file, not just frontmatter, so a drifted body
+  # (the actual instructions) is caught too.
   for idx in "${!ACTIVE_PATHS[@]}"; do
     skill_path="${ACTIVE_PATHS[$idx]}"
     # Use the same relative path the plugin.json/README checks use, so bucketed
@@ -208,21 +251,35 @@ for mirror_rel in .claude/skills .agents/skills; do
     mirror_skill="$mirror_abs/$rel_skill/SKILL.md"
 
     if [ ! -f "$mirror_skill" ]; then
-      echo "WARN $mirror_rel/$rel_skill/SKILL.md missing — run scripts/sync-copied-skills.sh" >&2
-      WARNINGS=$((WARNINGS + 1))
+      echo "FAIL $mirror_rel/$rel_skill/SKILL.md missing — run scripts/sync-copied-skills.sh" >&2
+      ERRORS=$((ERRORS + 1))
       continue
     fi
 
-    # Compare just the frontmatter (between the two --- delimiters at the top).
-    # The full bodies can legitimately differ in trailing whitespace, but the
-    # metadata block is what determines what the harness sees.
-    src_fm="$(awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f {print}' "$src_skill")"
-    mirror_fm="$(awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f {print}' "$mirror_skill")"
-    if [ "$src_fm" != "$mirror_fm" ]; then
-      echo "WARN $mirror_rel/$rel_skill frontmatter drifted from $skill_path — run scripts/sync-copied-skills.sh" >&2
-      WARNINGS=$((WARNINGS + 1))
+    if ! diff -q \
+        <(sed -e 's/[[:space:]]*$//' "$src_skill") \
+        <(sed -e 's/[[:space:]]*$//' "$mirror_skill") >/dev/null 2>&1; then
+      echo "FAIL $mirror_rel/$rel_skill drifted from $skill_path — run scripts/sync-copied-skills.sh" >&2
+      ERRORS=$((ERRORS + 1))
     fi
   done
+
+  # Reverse direction: every mirror entry must trace back to a skills/
+  # source. A mirror SKILL.md with no counterpart under skills/ is an
+  # orphan (most likely deleted from skills/ without re-running the sync
+  # script's --delete pass). -L: a mirror entry may be a symlink (e.g. left
+  # over from a manual test or a partial migration) rather than a real
+  # copy; follow it so an orphan hiding behind a symlinked directory is
+  # still caught.
+  while IFS= read -r -d '' mirror_md; do
+    mdir="$(dirname "$mirror_md")"
+    rel_skill="${mdir#"$mirror_abs"/}"
+    src_skill="$REPO/skills/$rel_skill/SKILL.md"
+    if [ ! -f "$src_skill" ]; then
+      echo "FAIL $mirror_rel/$rel_skill has no skills/$rel_skill source — orphaned mirror entry, delete it or run scripts/sync-copied-skills.sh" >&2
+      ERRORS=$((ERRORS + 1))
+    fi
+  done < <(find -L "$mirror_abs" -name SKILL.md -print0)
 done
 
 # --- Summary ---

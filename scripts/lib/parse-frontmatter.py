@@ -75,8 +75,16 @@ def parse_frontmatter(path):
             return {"error": f"duplicate key '{key}' at line {i + 2}"}
         rest = m.group(2).strip()
 
-        # Block scalar (| or >).
-        if rest in ("|", ">"):
+        # Block scalar (| or >), optionally followed by a chomping indicator
+        # ('-' strip, '+' keep) and/or an explicit indentation-indicator
+        # digit, in either order (YAML permits both "|-2" and "|2-"). Full
+        # chomping semantics aren't implemented — the "trim trailing blank
+        # lines" step below already approximates "strip" for all variants —
+        # the goal is just to recognize the header and capture the content
+        # instead of erroring or mis-parsing it as a literal scalar value.
+        block_match = re.match(r"^([|>])([+-]?[0-9]?[+-]?)$", rest)
+        if block_match:
+            style = block_match.group(1)
             i += 1
             block_lines = []
             while i < len(fm_lines):
@@ -101,7 +109,7 @@ def parse_frontmatter(path):
                 block_lines.pop()
             block_lines = _dedent(block_lines)
 
-            if rest == "|":
+            if style == "|":
                 value = "".join(ln + "\n" for ln in block_lines)
             else:
                 value = " ".join(ln.strip() for ln in block_lines if ln.strip())

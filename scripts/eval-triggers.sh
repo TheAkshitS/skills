@@ -34,8 +34,15 @@ if ! command -v jq     >/dev/null 2>&1; then echo "error: jq required"     >&2; 
 
 PASS=0; FAIL=0
 
-# lower-case substring test: phrase_in $haystack $needle
-phrase_in() { case "$1" in *"$2"*) return 0;; *) return 1;; esac; }
+# Word-boundary test: phrase_in $haystack $needle. A raw substring test would
+# let a short trigger phrase like "C4" false-match inside "C40" or "EC4".
+# grep -w requires a non-word char (or line start/end) on both sides of the
+# match; -F keeps the needle a literal fixed string so regex metacharacters
+# in a trigger phrase (e.g. "C4-PlantUML", "context/container/component")
+# aren't misinterpreted. `-w` + `-F` for whole-word fixed-string matching
+# works on both GNU grep and macOS's BSD grep (verified: `grep (BSD grep,
+# GNU compatible) 2.6.0-FreeBSD`).
+phrase_in() { printf '%s' "$1" | grep -qiwF -- "$2"; }
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 while IFS= read -r -d '' skill_md; do
@@ -45,6 +52,16 @@ while IFS= read -r -d '' skill_md; do
 
   triggers="$src/evals/triggers.json"
   [ -f "$triggers" ] || continue
+
+  # Malformed JSON here would otherwise fail silently: `jq` running inside a
+  # process-substitution `<(...)` doesn't propagate its exit code out to
+  # `set -e`, so a parse error just yields empty arrays below and every
+  # assertion vacuously passes. Fail loudly instead.
+  if ! jq empty "$triggers" >/dev/null 2>&1; then
+    echo "FAIL $name: $triggers is not valid JSON" >&2
+    FAIL=$((FAIL + 1))
+    continue
+  fi
 
   desc="$(python3 "$PARSER" "$skill_md" | jq -r '.data.description // ""')"
   desc_lc="$(lower "$desc")"

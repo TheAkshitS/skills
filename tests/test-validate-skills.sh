@@ -317,6 +317,25 @@ write_skill_raw "tab-indent" $'---\nname: tab-indent\ndescription: |\n\tindented
 run_test "tab in block scalar fails" 1 "tab in block-scalar"
 rm -rf "$TMPDIR/skills/tab-indent"
 
+# 15b. Unquoted ": " (colon-space) in a single-line description fails — it's
+# invalid YAML for strict parsers (GitHub) even though the lenient parser
+# accepts it. A quoted value or block scalar with the same colon must pass.
+reset_manifests
+write_skill "colon-desc" '---
+name: colon-desc
+description: Use when the user wants this. Not for: anything else.
+---'
+run_test "unquoted colon-space in description fails" 1 "unquoted ': '"
+rm -rf "$TMPDIR/skills/colon-desc"
+
+reset_manifests
+write_skill "colon-desc-quoted" '---
+name: colon-desc-quoted
+description: "Use when the user wants this. Not for: anything else."
+---'
+run_test "quoted colon-space in description passes" 0 "OK   colon-desc-quoted"
+rm -rf "$TMPDIR/skills/colon-desc-quoted"
+
 # 16. Mirror check: an active skill with a matching copy in both mirrors
 # passes with no mirror FAIL lines (proves the happy path is actually
 # reachable, so the later failure tests aren't just always-red).

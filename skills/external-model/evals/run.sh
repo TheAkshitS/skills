@@ -3,7 +3,7 @@ set -euo pipefail
 
 # run.sh — hermetic, executable grader for the external-model evals.
 #
-# Encodes the expectations[] arrays from evals.json as concrete checks
+# Encodes the assertions[] arrays from evals.json as concrete checks
 # against the dispatcher's dry-run output. Runs with NONE of the real CLIs
 # installed: we stub opencode/cursor-agent/kiro-cli on a temp PATH (so
 # `command -v` and `detect`/`--all` resolve them) and use a temp HOME (so
@@ -23,6 +23,27 @@ for cli in opencode cursor-agent kiro-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"$STUB_DIR/$cli"
   chmod +x "$STUB_DIR/$cli"
 done
+
+# Minimal `timeout` shim so eval-12's real-exec timeout assertion is
+# deterministic on any host, including macOS dev machines that ship neither
+# GNU `timeout` nor `gtimeout`. It's placed on STUB_DIR, which is prepended
+# to PATH below, so it wins over any real timeout/gtimeout the host has.
+# Mirrors just enough of GNU coreutils' `timeout DURATION cmd...` (DURATION
+# as "Ns") for run-model.sh's own usage: run cmd, and if it's still alive
+# after DURATION, TERM it.
+cat >"$STUB_DIR/timeout" <<'STUB'
+#!/usr/bin/env bash
+dur="${1%s}"; shift
+"$@" &
+pid=$!
+( sleep "$dur"; kill -TERM "$pid" 2>/dev/null ) &
+watcher=$!
+if wait "$pid" 2>/dev/null; then rc=0; else rc=$?; fi
+kill "$watcher" 2>/dev/null
+wait "$watcher" 2>/dev/null
+exit "$rc"
+STUB
+chmod +x "$STUB_DIR/timeout"
 
 export PATH="$STUB_DIR:$PATH"
 export HOME="$FAKE_HOME"
@@ -252,6 +273,58 @@ eval_11() {
   return $ok
 }
 
+# --- eval-12: real execution (no DRYRUN) -- exit code + timeout enforcement -
+# Every eval above runs with EXTERNAL_MODEL_DRYRUN=1, so none of them ever
+# executed run_one's real-run branch (build_cmd's timeout-wrapper selection,
+# the kiro-cli env hint gate, and the actual sandboxed exec). This is the one
+# eval that unsets it and lets the dispatcher really exec the stub CLI.
+eval_12() {
+  local out err rc=0 ok=0 start end elapsed
+  local errfile="$FAKE_HOME/em_e12.err"
+
+  # -- (a) exit code propagation: stub exits 42, no timeout involved. --
+  # Route the dispatcher's stdout to a regular file, not a command
+  # substitution: the real-run path backgrounds the CLI under `set -m`, and
+  # capturing that through a `$(...)` pipe wedges the pipe open (the harness
+  # is itself often run under an outer capture, e.g. validate-skills.sh) — a
+  # plain file has no reader to block. All the other evals are dry-run and
+  # never hit this, so they can keep using `$(...)`.
+  local outfile="$FAKE_HOME/em_e12.out"
+  printf '#!/usr/bin/env bash\nexit 42\n' >"$STUB_DIR/opencode"
+  chmod +x "$STUB_DIR/opencode"
+  env -u EXTERNAL_MODEL_DRYRUN "$DISPATCH" --cli opencode "ping" >"$outfile" 2>"$errfile" || rc=$?
+  out="$(cat "$outfile")"; err="$(cat "$errfile")"; rm -f "$outfile" "$errfile"
+  expect "exit code did not propagate from stub (got $rc, want 42)" test "$rc" -eq 42 || ok=1
+  expect "unexpectedly printed DRYRUN output on a real run" not_contains "DRYRUN" "$out" || ok=1
+
+  # -- (b) a hanging CLI is actually killed once --timeout elapses. --------
+  # Timeout enforcement delegates to a `timeout`/`gtimeout` binary; the harness
+  # puts a portable `timeout` shim on STUB_DIR (see top of file) so this runs
+  # deterministically on every host, coreutils or not.
+  # `exec sleep 10` (not a plain `sleep 10`) so the stub's own bash process is
+  # replaced by `sleep` rather than spawning it as a child: a real CLI binary
+  # is a single process, and a bare `sleep` child would survive its parent
+  # bash getting killed (orphaned) since a kill of the direct PID alone
+  # doesn't reach a foreground child.
+  printf '#!/usr/bin/env bash\nexec sleep 10\n' >"$STUB_DIR/opencode"
+  chmod +x "$STUB_DIR/opencode"
+  rc=0
+  start=$SECONDS
+  env -u EXTERNAL_MODEL_DRYRUN "$DISPATCH" --cli opencode --timeout 2 "ping" >/dev/null 2>"$errfile" || rc=$?
+  end=$SECONDS
+  elapsed=$(( end - start ))
+  err="$(cat "$errfile")"; rm -f "$errfile"
+  expect "hanging stub was not killed in time (took ${elapsed}s, wanted well under 10s)" \
+    test "$elapsed" -lt 6 || ok=1
+  expect "exit code 0 despite timeout (stub was not actually killed)" \
+    test "$rc" -ne 0 || ok=1
+
+  # Restore the opencode stub so it doesn't affect any later eval run.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$STUB_DIR/opencode"
+  chmod +x "$STUB_DIR/opencode"
+  return $ok
+}
+
 # --- Drive ------------------------------------------------------------------
 run_eval 1 "--all fans out read-only"
 run_eval 2 "--cli cursor-agent --write edits repo with --force"
@@ -264,9 +337,10 @@ run_eval 8 "--context pointing at a directory is rejected"
 run_eval 9 "--context file over the 256 KiB cap is rejected"
 run_eval 10 "invalid --timeout value is rejected"
 run_eval 11 "unknown --cli value is rejected"
+run_eval 12 "real execution: exit code propagates and --timeout actually kills"
 
 echo ""
-echo "external-model evals: $PASSES passed, $FAILS failed (11 total)"
+echo "external-model evals: $PASSES passed, $FAILS failed (12 total)"
 if [[ $FAILS -gt 0 ]]; then
   exit 1
 fi

@@ -13,30 +13,58 @@ set -euo pipefail
 # parent or forked child — created the sandbox subdirectory inside it.
 RUN_TMPDIR=""
 
+# `set -m` (job control / monitor mode) makes every top-level `foo &` job get
+# its OWN process group (pgid == the job's own pid) instead of inheriting
+# this script's process group. That's what makes CHILD_PIDS below usable for
+# targeted cleanup: `kill -TERM -<pid>` (negative pid = whole group) reaches
+# a job's full subtree (e.g. the `timeout` wrapper plus the CLI it wraps)
+# without touching this script's own inherited group. See cleanup_and_exit's
+# comment for why that distinction matters.
+set -m
+
+# Every PID this script itself backgrounds at top level (the single-run job
+# in run_one, and — for --all — each per-CLI run_one fork via cli_pids)
+# should be tracked here so cleanup_and_exit can kill exactly those jobs and
+# nothing else. run_one appends to this on the single-run path and removes
+# its entry once reaped (a dead PID can be recycled by the OS, and a stale
+# entry could otherwise cause a later cleanup to kill an unrelated process).
+declare -a CHILD_PIDS=()
+
 ensure_run_tmpdir() {
   if [[ -z "$RUN_TMPDIR" ]]; then
     RUN_TMPDIR="$(mktemp -d)"
   fi
 }
 
-# Propagate SIGINT/SIGTERM to the whole process group so all CLI children
-# die (single-CLI and every forked --all child alike), then remove
-# RUN_TMPDIR (sweeping every per-CLI sandbox in one shot) before exiting.
-# Without the process-group kill + RUN_TMPDIR sweep, Ctrl-C/SIGTERM leaks
-# running children and their /tmp/tmp.XXXX sandboxes because a foreground
-# child blocks this trap from running until the child itself exits.
+# Kill only the child process groups this script actually backgrounded (see
+# CHILD_PIDS / set -m above), then remove RUN_TMPDIR (sweeping every per-CLI
+# sandbox in one shot) before exiting. Without this, Ctrl-C/SIGTERM would
+# leak running children and their /tmp/tmp.XXXX sandboxes, because a
+# foreground child blocks this trap from running until the child itself
+# exits.
 #
-# `trap '' INT TERM EXIT` is the first thing this does, before `kill 0`.
-# `kill 0` sends the signal to this process's own group, which includes
-# itself — so without disarming the traps first, a SIGINT handler's own
-# `kill 0` re-delivers SIGTERM to this very shell, re-entering this function
-# via the TERM trap, which would run to completion and `exit 143` before the
-# original INT call's `exit 130` is ever reached. Disarming first makes the
-# handler non-reentrant and preserves the originally-intended exit code.
+# This intentionally does NOT signal process group 0 (this script's own
+# inherited group). When run-model.sh is invoked non-interactively — from
+# another script, an agent harness, or CI — there is no job control at the
+# call site, so this script shares its PARENT's process group. A `kill 0`
+# there signals the parent orchestrator and any unrelated sibling processes,
+# not just this script's own children. Targeting only the tracked child PIDs
+# (as their own process groups, via set -m) avoids that entirely.
+#
+# `trap '' INT TERM EXIT` is the first thing this does, before killing
+# anything. Without disarming the traps first, a signal delivered while this
+# handler is running could re-enter it (e.g. via the other trap), which
+# would run to completion and `exit 143` before the original INT call's
+# `exit 130` is ever reached. Disarming first makes the handler non-reentrant
+# and preserves the originally-intended exit code.
 cleanup_and_exit() {
   local code="$1"
   trap '' INT TERM EXIT
-  kill 0 2>/dev/null || true
+  local p
+  for p in "${CHILD_PIDS[@]-}"; do
+    [[ -n "$p" ]] || continue
+    kill -TERM -"$p" 2>/dev/null || true
+  done
   if [[ -n "$RUN_TMPDIR" ]]; then
     rm -rf "$RUN_TMPDIR"
     RUN_TMPDIR=""
@@ -151,6 +179,25 @@ installed_clis() {
 # `v=` is present and != 1, this function prints nothing AND sets the
 # caller's CONFIG_VERSION_ERROR to a non-empty diagnostic.
 CONFIG_VERSION_ERROR=""
+
+# Same side-channel pattern as CONFIG_VERSION_ERROR, for a config file's
+# CLI= value naming something outside CLIS[]. Parse-time `--cli` is already
+# validated (see the ARG_CLI case below); a config-sourced CLI value was not,
+# so a typo there used to surface only much later, deep inside build_cmd, as
+# a confusing "internal: unknown cli" error. validate_config_cli() must be
+# called directly (never through a `$(...)` subshell) so this side effect is
+# visible to the caller — same reason CONFIG_VERSION_ERROR pre-scans run
+# outside command substitution below.
+CONFIG_CLI_ERROR=""
+validate_config_cli() {
+  local file="$1" cli
+  cli="$(config_get "$file" CLI)"
+  [[ -n "$cli" ]] || return 0
+  case "$cli" in
+    opencode|cursor-agent|kiro-cli) ;;
+    *) CONFIG_CLI_ERROR="config $file sets CLI=$cli, which is not a known CLI (valid: opencode, cursor-agent, kiro-cli)" ;;
+  esac
+}
 
 config_get() {
   local file="$1" key="$2" line val
@@ -335,11 +382,24 @@ if [[ "$SUBCMD" == "config" ]]; then
       if [[ -n "$CONFIG_VERSION_ERROR" ]]; then
         die "$CONFIG_VERSION_ERROR"
       fi
+      # Same pre-scan for a config CLI= value outside CLIS[]; see
+      # validate_config_cli's comment for why this must also run directly,
+      # not inside resolve_default's `$(...)` capture below.
+      validate_config_cli "$GLOBAL_CONFIG"
+      [[ -z "$CONFIG_CLI_ERROR" ]] && validate_config_cli "$REPO_CONFIG"
+      [[ -z "$CONFIG_CLI_ERROR" ]] || die "$CONFIG_CLI_ERROR"
       if out="$(resolve_default)"; then
         IFS="$RD_SEP" read -r r_cli r_model r_src <<<"$out"
         printf 'cli:    %s\n' "$r_cli"
         if [[ -n "$r_model" ]]; then printf 'model:  %s\n' "$r_model"; else printf 'model:  (CLI default)\n'; fi
         printf 'source: %s\n' "$r_src"
+        # A config can name a CLI that is no longer installed. Flag it so the
+        # next bare run does not fail at exec with a confusing "command not
+        # found"; the source line stays accurate, the warning explains why
+        # the resolution will not actually succeed.
+        if ! is_installed "$r_cli"; then
+          err "warning: '$r_cli' is configured but not installed; a bare run will fail. Installed: $(installed_clis | tr '\n' ' ')"
+        fi
       else
         printf 'cli:    (none resolved)\n'
         printf 'model:  (CLI default)\n'
@@ -406,6 +466,17 @@ if [[ -n "$CONTEXT_FILE" ]]; then
       die "--context - requires data on stdin"
     fi
   else
+    # Reject symlinks outright rather than silently following them. A
+    # filename in a shared/writable dir (e.g. /tmp) could be swapped for a
+    # symlink pointing at an unintended file, forwarding its contents to a
+    # third-party model without the caller realizing. Checked before -e/-f
+    # (which both follow symlinks) so a dangling symlink is also caught here
+    # with a clear message instead of falling through to "not found".
+    # `readlink` (no -f; not available in bash 3.2's macOS toolchain) shows
+    # the one-level target so the indirection is disclosed even when refused.
+    if [[ -L "$CONTEXT_FILE" ]]; then
+      die "--context refuses to follow symlinks: $CONTEXT_FILE -> $(readlink "$CONTEXT_FILE" 2>/dev/null || printf '<unresolved>')"
+    fi
     [[ -e "$CONTEXT_FILE" ]] || die "--context file not found: $CONTEXT_FILE"
     [[ -f "$CONTEXT_FILE" ]] || die "--context file is not a regular file: $CONTEXT_FILE"
     [[ -r "$CONTEXT_FILE" ]] || die "--context file not readable: $CONTEXT_FILE"
@@ -507,8 +578,10 @@ run_one() {
   fi
 
   # kiro env hint (don't block; let the real error surface, but help the caller).
-  # Only on real runs — a dry-run shouldn't emit env warnings.
-  if [[ -z "${EXTERNAL_MODEL_DRYRUN:-}" && "$cli" == "kiro-cli" && -z "${KIRO_API_KEY:-}" ]]; then
+  # Only on real runs — a dry-run shouldn't emit env warnings. Dry-run is
+  # ONLY EXTERNAL_MODEL_DRYRUN == "1" (see build_cmd/timeout-wrapper checks
+  # below); any other truthy-looking value (e.g. "true") is a REAL run.
+  if [[ "${EXTERNAL_MODEL_DRYRUN:-}" != "1" && "$cli" == "kiro-cli" && -z "${KIRO_API_KEY:-}" ]]; then
     err "hint: kiro-cli requires KIRO_API_KEY; it is not set in the environment."
   fi
 
@@ -519,11 +592,17 @@ run_one() {
   # would make dry-run output depend on whether the host has GNU `timeout`
   # installed (Linux yes, macOS no). On real runs, wrap when both TIMEOUT_BIN
   # and TIMEOUT are set.
+  #
+  # Dry-run detection is `== "1"` everywhere in this function (matches the
+  # dry-run-and-exit branch below) — NOT `-z`. `-z` treats ANY non-empty
+  # value (e.g. EXTERNAL_MODEL_DRYRUN=true) as "is a dry run", which would
+  # both skip the timeout wrapper AND suppress the no-timeout warning for a
+  # run that is actually about to execute the CLI for real and unbounded.
   local full=()
-  if [[ -z "${EXTERNAL_MODEL_DRYRUN:-}" && -n "$TIMEOUT_BIN" && -n "$TIMEOUT" ]]; then
+  if [[ "${EXTERNAL_MODEL_DRYRUN:-}" != "1" && -n "$TIMEOUT_BIN" && -n "$TIMEOUT" ]]; then
     full=("$TIMEOUT_BIN" "${TIMEOUT}s" "${CMD[@]}")
   else
-    if [[ -z "$TIMEOUT_BIN" && -z "${EXTERNAL_MODEL_DRYRUN:-}" ]]; then
+    if [[ -z "$TIMEOUT_BIN" && "${EXTERNAL_MODEL_DRYRUN:-}" != "1" ]]; then
       warn_no_timeout_once
     fi
     full=("${CMD[@]}")
@@ -544,11 +623,13 @@ run_one() {
 
   # Real run. The prompt is the final element of "${full[@]}" (an argv arg),
   # never on stdin — all three CLIs take it positionally.
+  # --write runs from the repo root regardless of the invocation cwd, so a
+  # `cd src/ && run-model.sh --write` still edits files in the real repo,
+  # not a subdir the agent happened to be in (matches the dry-run report).
   if [[ "$write" -eq 1 ]]; then
-    # Stay in the repo cwd so the CLI can read/edit the real working tree.
-    "${full[@]}"
+    ( cd "$REPO_ROOT" && "${full[@]}" )
   else
-    local sandbox rc
+    local sandbox rc job_pid
     # Every sandbox nests under the single parent RUN_TMPDIR (created here on
     # first use) instead of being its own top-level mktemp -d. That parent
     # dir is known to the dispatcher's own (top-level-trap-owning) shell even
@@ -568,11 +649,18 @@ run_one() {
     # Ctrl-C/SIGTERM. `wait` on a background job, by contrast, is
     # interrupted immediately when a trapped signal arrives, so the trap
     # runs right away (see cleanup_and_exit at the top of this file), kills
-    # the process group (the child included), and removes RUN_TMPDIR (which
-    # contains $sandbox).
+    # just this job's own process group (see CHILD_PIDS / set -m above —
+    # the child is included since it's part of that group), and removes
+    # RUN_TMPDIR (which contains $sandbox).
     ( cd "$sandbox" && "${full[@]}" ) &
+    job_pid=$!
+    CHILD_PIDS+=("$job_pid")
     rc=0
-    wait "$!" || rc=$?
+    wait "$job_pid" || rc=$?
+    # Drop the reaped PID from CHILD_PIDS: it's no longer running, and a
+    # stale entry risks a later cleanup killing an unrelated process that
+    # happens to reuse this now-recycled PID.
+    CHILD_PIDS=("${CHILD_PIDS[@]/$job_pid}")
     rm -rf "$sandbox"
     trap 'rm -rf "$RUN_TMPDIR"' EXIT
     return "$rc"
@@ -605,30 +693,35 @@ if [[ $ALL -eq 1 ]]; then
   # subshell (via `&`), so WARNED_NO_TIMEOUT=1 set here is inherited by copy
   # at fork time and the children's own warn_no_timeout_once calls become
   # no-ops — instead of one warning per installed CLI.
-  if [[ -z "$TIMEOUT_BIN" && -z "${EXTERNAL_MODEL_DRYRUN:-}" ]]; then
+  if [[ -z "$TIMEOUT_BIN" && "${EXTERNAL_MODEL_DRYRUN:-}" != "1" ]]; then
     warn_no_timeout_once
   fi
 
   # Install the --all-specific per-CLI stdout/err cleanup trap BEFORE the
   # fanout, so a signal arriving between fork iterations still has the
   # right handler. The trap string is re-evaluated on every signal, so it
-  # sees the cli_outf/cli_errf arrays' state at fire time — entries set
-  # so far are cleaned, unset entries (`rm -f ""`) are no-ops. The trap
-  # then delegates to cleanup_and_exit instead of doing its own ad hoc
-  # `kill 0` here, for the same two reasons as before:
-  #   1. RUN_TMPDIR sweep: cleanup_and_exit is what removes the
-  #      dispatcher-owned RUN_TMPDIR (or, in --all, no-ops it because
-  #      each child has its own — see RUN_TMPDIR above). A trap here
-  #      that only `kill 0`s and returns would kill every child but
-  #      never reach an `exit`, leaking every per-CLI sandbox dir and
-  #      leaving the shell to die from the raw signal instead of the
-  #      documented 130/143 exit code.
-  #   2. Non-reentrancy: cleanup_and_exit disarms INT/TERM/EXIT before
-  #      its own `kill 0`, so the self-delivered signal from that
-  #      `kill 0` can't re-enter any handler and clobber the originally-
-  #      intended exit code.
-  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; cleanup_and_exit 130' INT
-  trap 'for f in "${cli_outf[@]}" "${cli_errf[@]}"; do rm -f "$f"; done; cleanup_and_exit 143' TERM
+  # sees the cli_outf/cli_errf/cli_pids arrays' state at fire time — entries
+  # set so far are cleaned/killed, unset entries are no-ops (`rm -f ""`, and
+  # the `[[ -z ... ]]` guard skips empty cli_pids slots). Every array
+  # reference uses the `[@]-` form (not bare `[@]`) because under bash 3.2's
+  # `set -u`, `"${arr[@]}"` on a still-empty/undeclared array throws
+  # "unbound variable" and aborts the rest of the trap string outright —
+  # `"${arr[@]-}"` degrades to nothing instead, so the trap always reaches
+  # cleanup_and_exit. This can fire before `declare -a cli_pids=() ...`
+  # below has even run (a signal between fork iterations), so the guard
+  # matters even on the very first array reference.
+  #
+  # The trap kills each tracked per-CLI process group directly (cli_pids),
+  # then delegates to cleanup_and_exit for the RUN_TMPDIR sweep + exit —
+  # cleanup_and_exit itself only knows about CHILD_PIDS (the single-run
+  # path's own job), not cli_pids, so --all must kill its own children here
+  # rather than relying on cleanup_and_exit to do it. See cleanup_and_exit's
+  # comment at the top of this file for why this never signals process
+  # group 0 (this script's own inherited group): in a non-interactive
+  # invocation that group is shared with the parent orchestrator and any
+  # unrelated siblings.
+  trap 'for f in "${cli_outf[@]-}" "${cli_errf[@]-}"; do rm -f "$f"; done; for p in "${cli_pids[@]-}"; do [[ -z "$p" ]] || kill -TERM -"$p" 2>/dev/null || true; done; cleanup_and_exit 130' INT
+  trap 'for f in "${cli_outf[@]-}" "${cli_errf[@]-}"; do rm -f "$f"; done; for p in "${cli_pids[@]-}"; do [[ -z "$p" ]] || kill -TERM -"$p" 2>/dev/null || true; done; cleanup_and_exit 143' TERM
   declare -a cli_pids=() cli_outf=() cli_errf=() cli_starts=()
   for i in "${!cli_list[@]}"; do
     c="${cli_list[$i]}"
@@ -645,6 +738,10 @@ if [[ $ALL -eq 1 ]]; then
     wait "${cli_pids[$i]}" || rc=$?
     cli_rcs[$i]=$rc
     cli_elapsed[$i]=$(( SECONDS - ${cli_starts[$i]} ))
+    # Clear the reaped PID so the still-installed INT/TERM trap can't later
+    # kill an unrelated process that reused it (mirrors the single-run
+    # CHILD_PIDS prune; the trap's `[[ -z "$p" ]] || ...` skips empties).
+    cli_pids[$i]=""
   done
 
   for i in "${!cli_list[@]}"; do
@@ -685,6 +782,17 @@ RES_MODEL=""
 config_get "$GLOBAL_CONFIG" v >/dev/null
 [[ -z "$CONFIG_VERSION_ERROR" ]] && config_get "$REPO_CONFIG" v >/dev/null
 [[ -z "$CONFIG_VERSION_ERROR" ]] || die "$CONFIG_VERSION_ERROR"
+
+# Pre-scan for a config CLI= value outside CLIS[] so a bare (no --cli) run
+# gets a clear error here instead of failing deep inside build_cmd with a
+# confusing "internal: unknown cli". Only when there's no explicit --cli:
+# with --cli the config's CLI= value is never consulted (see below), so a
+# stale/typo'd config CLI must not block an otherwise-valid explicit run.
+if [[ -z "$ARG_CLI" ]]; then
+  validate_config_cli "$GLOBAL_CONFIG"
+  [[ -z "$CONFIG_CLI_ERROR" ]] && validate_config_cli "$REPO_CONFIG"
+  [[ -z "$CONFIG_CLI_ERROR" ]] || die "$CONFIG_CLI_ERROR"
+fi
 
 if [[ -n "$ARG_CLI" ]]; then
   RES_CLI="$ARG_CLI"

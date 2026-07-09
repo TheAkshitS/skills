@@ -6,7 +6,7 @@
       "prompt": "Can I get a second opinion on this retry loop? I want to make sure the backoff is sane.\n\n```python\ndef call_api(self, path, retries=5):\n    for i in range(retries):\n        try:\n            return self._do_request(path)\n        except TransientError:\n            time.sleep(2 ** i)\n    raise MaxRetriesExceeded(path)\n```\n\nAsk every external model I have installed what they think of the backoff strategy and whether I should add jitter. Show their answers side by side.",
       "expected_output": "Skill resolves to run-model.sh --all, fanning the prompt out to every installed CLI (opencode, cursor-agent, kiro-cli) in forced read-only mode, with --model NOT forwarded (each CLI uses its own default model). Output presents each CLI's answer under a '---- <cli> ----' header, side by side. The embedded Python snippet is part of the prompt sent to each CLI because the default read-only sandbox cannot see repo files.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "stdout contains `---- opencode ----`",
         "stdout contains `---- cursor-agent ----`",
         "stdout contains `---- kiro-cli ----`",
@@ -20,7 +20,7 @@
       "prompt": "I have a big refactor that splits src/legacy/billing.py into billing_core.py, billing_tax.py, and billing_report.py. Have cursor-agent handle it — it's good at large mechanical moves. Give it the repo access it needs to actually edit the files.",
       "expected_output": "Skill resolves to run-model.sh --cli cursor-agent --write \"<prompt>\" so the run executes in the real repo cwd (not the temp sandbox) and passes --force to cursor-agent to allow unapproved edits. The CLI is explicitly pinned to cursor-agent per the user's request; the prompt describes the refactor task. The resolved command includes a `--` delimiter before the prompt to prevent flag injection, and the dispatcher emits a stderr warning that --write grants the external CLI repo write access.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "stdout contains `DRYRUN cli=cursor-agent`",
         "stdout contains `mode=repo:/path/to/repo` (the resolved git repo root)",
         "DRYRUN cmd array contains `cursor-agent`",
@@ -36,7 +36,7 @@
       "prompt": "Ask gpt-5 this: in a Postgres table with columns (id, user_id, created_at, amount_cents), what's the most efficient index to answer 'total amount per user in the last 30 days' and why would a composite (user_id, created_at) beat a single-column index on user_id here?",
       "expected_output": "Skill demonstrates the per-CLI gpt-5 model-name mapping by running the dispatcher once per CLI: run-model.sh --cli <X> --model gpt-5 \"<prompt>\" for X in opencode, cursor-agent, kiro-cli. Expected per CLI: opencode receives the bare name -m gpt-5 (the user should pass the openai/gpt-5 provider form when targeting opencode — opencode may reject a bare name; see references/cli-matrix.md Gotchas); cursor-agent receives bare -m gpt-5; kiro-cli headless has no model-select flag, so -m is dropped from its cmd and the dispatcher warns 'kiro-cli headless has no model-select flag' on stderr. In every command a `--` delimiter appears before the prompt so a prompt beginning with '-' cannot be parsed as a flag. The Postgres indexing question is the prompt body in every run.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "stdout contains `DRYRUN cmd: [opencode] [run] [-m] [gpt-5] [--] [Postgres indexing question]` (opencode receives the bare model name as the dispatcher passes --model gpt-5 through unchanged; -- delimiter prevents flag injection)",
         "stdout contains `DRYRUN cmd: [cursor-agent] [-p] [--output-format] [text] [-m] [gpt-5] [--trust] [--] [Postgres indexing question]` (cursor-agent receives the bare model name per the CLI matrix; -- delimiter prevents flag injection)",
         "stderr contains `kiro-cli headless has no model-select flag` (kiro-cli warning path)",
@@ -49,7 +49,7 @@
       "prompt": "Make opencode my default external CLI and set its default model to openai/gpt-5 so I stop having to pass --cli and --model every time.",
       "expected_output": "Skill invokes run-model.sh config set --cli opencode --model openai/gpt-5 (the bare 'set' alias is also accepted). This writes only the GLOBAL config file at ~/.claude/skills/external-model/config with lines CLI=opencode and MODEL=openai/gpt-5. Skill does NOT touch the per-repo .claude/external-model.config. Output confirms 'wrote global default: CLI=opencode MODEL=openai/gpt-5 -> <path>'.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "stdout contains `wrote global default: CLI=opencode MODEL=openai/gpt-5 -> ~/.claude/skills/external-model/config`",
         "the file `~/.claude/skills/external-model/config` exists after the run",
         "the first line of `~/.claude/skills/external-model/config` is `v=1`",
@@ -63,7 +63,7 @@
       "prompt": "What's my current default external model setup? Which CLI and model will get used if I just run /external-model with no flags?",
       "expected_output": "Skill invokes run-model.sh config show (the bare 'show' alias is also accepted). Output prints three lines: 'cli: <resolved>', 'model: <resolved or (CLI default)>', 'source: <repo config | global config | only installed CLI>'. Resolution follows precedence: repo .claude/external-model.config first, then global config, then the single installed CLI; if none resolves, prints 'cli: (none resolved)' and lists installed CLIs.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "stdout contains `cli:    (none resolved)` (the literal cli line in the no-config case, with the 4-space padding from the format string)",
         "stdout contains `model:  (CLI default)` (the literal model line in the no-config case)",
         "stdout contains `source: no config; installed:` (the source line indicates no config and lists installed CLIs)",
@@ -75,7 +75,7 @@
       "prompt": "Before I rely on this skill, I want to know which of the external model CLIs are actually installed on this machine. List them.",
       "expected_output": "Skill invokes run-model.sh detect, which runs command -v against opencode, cursor-agent, and kiro-cli and prints each installed one on its own line. If none are installed, it prints an error to stderr listing the candidates it looked for and exits non-zero. No model is invoked.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "stdout contains a line `opencode`",
         "stdout contains a line `cursor-agent`",
         "stdout contains a line `kiro-cli`",
@@ -88,7 +88,7 @@
       "prompt": "I want to ask opencode: `-explain why this loop is O(n²)` — literally starting with a dash. Run that as a normal prompt without making me add a separate `--`.",
       "expected_output": "The dispatcher must accept a prompt that starts with `-` as the first positional argument. It resolves to run-model.sh --cli opencode \"-explain why this loop is O(n²)\" and the DRYRUN output shows the child-CLI command with a `--` delimiter followed by the dash-prefixed prompt as the final element.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "exit code is 0",
         "stdout contains `DRYRUN cli=opencode`",
         "DRYRUN cmd array contains `[--]`",
@@ -100,7 +100,7 @@
       "prompt": "Ask opencode this, but use my notes directory as --context by accident: run-model.sh --context /some/directory \"summarize these notes\"",
       "expected_output": "The dispatcher validates --context before building any command. Because the path exists but is a directory, not a regular file, it dies with '--context file is not a regular file: <path>' on stderr and exits non-zero before reaching build_cmd/dry-run output, so no DRYRUN line is printed.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "exit code is non-zero",
         "stderr contains `--context file is not a regular file:` followed by the directory path",
         "stdout does not contain `DRYRUN` (dies during --context validation, before build_cmd)"
@@ -111,7 +111,7 @@
       "prompt": "Ask opencode with --context pointing at a huge log file that's well over the 256 KiB cap: run-model.sh --context ./huge.log \"what broke?\"",
       "expected_output": "The dispatcher reads the --context file's size before injecting it into the prompt. Because the file is larger than CONTEXT_MAX_BYTES (262144 bytes), it refuses rather than silently truncating: dies with '--context file is too large: <path> (<size> bytes; limit is 262144 bytes)' on stderr and exits non-zero before any DRYRUN output.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "exit code is non-zero",
         "stderr contains `--context file is too large:` followed by the file path",
         "stderr contains `limit is 262144 bytes`",
@@ -123,7 +123,7 @@
       "prompt": "Run with a bogus timeout: run-model.sh --timeout abc \"quick question\"",
       "expected_output": "The dispatcher validates --timeout against ^[1-9][0-9]*$ right after argument parsing, before resolving any CLI. A non-numeric value like 'abc' fails that regex, so it dies with '--timeout must be a positive integer (got 'abc')' on stderr and exits non-zero before any DRYRUN output.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "exit code is non-zero",
         "stderr contains `--timeout must be a positive integer (got 'abc')`",
         "stdout does not contain `DRYRUN` (dies during --timeout validation, before CLI resolution)"
@@ -134,7 +134,7 @@
       "prompt": "Run with a made-up CLI name: run-model.sh --cli nonexistent-tool \"quick question\"",
       "expected_output": "The dispatcher validates --cli against the known set (opencode, cursor-agent, kiro-cli) immediately after argument parsing. An unrecognized value dies with \"unknown --cli 'nonexistent-tool' (valid: opencode, cursor-agent, kiro-cli)\" on stderr and exits non-zero before any DRYRUN output.",
       "files": [],
-      "expectations": [
+      "assertions": [
         "exit code is non-zero",
         "stderr contains `unknown --cli 'nonexistent-tool' (valid: opencode, cursor-agent, kiro-cli)`",
         "stdout does not contain `DRYRUN` (dies during --cli validation, before CLI resolution)"

@@ -2,6 +2,9 @@
 name: external-model
 description: Get input from a different AI model (GPT-5, Gemini, Claude variants, or any model reachable via opencode/cursor-agent/kiro-cli) on a question, plan, or piece of code. Trigger this whenever the user wants another model's take, opinion, or judgment — "what would GPT-5/Gemini/another model say/think", "is this safe/right, get another opinion", "ask another model to check/review/weigh in", wants to delegate or run a prompt through cursor/opencode/kiro, wants to pick the best model for a task and run it, or wants to switch/set the default external-model CLI. Applies even without naming a CLI or model, and even when the ask is implicit ("before I ship this", "am I sure about this approach") rather than an explicit request for a "second opinion." Not for: re-running the user's own code/tests, asking Claude itself to reconsider, or general questions about what a CLI tool is/does.
 argument-hint: "<prompt> | config show | config set --cli <cli> [--model <m>] | detect"
+compatibility: "Requires at least one of opencode, cursor-agent, or kiro-cli installed and authenticated on PATH. kiro-cli headless mode also requires KIRO_API_KEY."
+license: MIT
+allowed-tools: bash
 ---
 
 # External Model
@@ -67,10 +70,14 @@ its own credentials, code, and safety policy.
 - **Read-only by default**: every run lands in a throwaway temp dir, so the
   external model cannot read or edit your real repo unless you explicitly opt
   in.
-- **`--write` is an explicit trust escalation**: it runs the external CLI in
-  your real repo cwd and passes its force/trust flag, allowing it to edit
-  files and bypass any approval prompts the CLI would normally show. Only use
-  it when you want the external model to mutate the repo.
+- **`--write` is an explicit trust escalation**: it runs the external CLI at
+  the repo root (via `git rev-parse --show-toplevel`, regardless of which
+  subdirectory you invoked from) and passes its force/trust flag where the CLI has one
+  (cursor-agent `--force`, kiro-cli `--trust-all-tools`), allowing it to edit
+  files and bypass any approval prompts the CLI would normally show. opencode
+  has no trust flag and is unrestricted whenever it isn't sandboxed, so
+  `--write` for opencode lifts the sandbox without passing a flag. Only use
+  `--write` when you want the external model to mutate the repo.
 - **`--context` exposes file contents**: the contents of the named file are
   prepended to the prompt and sent to the external model. Do not use it on
   files you would not paste into that model's chat UI.

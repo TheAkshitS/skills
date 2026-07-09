@@ -1,9 +1,10 @@
 # Eval scaffold for `external-model`
 
 These evals cover the skill's objectively verifiable behaviors: CLI dispatch,
-config resolution, error paths, dry-run output, and `--all` fanout. Six
-realistic user-style prompts — one per behavior — drafted to match the
-skill-creator workflow.
+config resolution, error paths, dry-run output, `--all` fanout, and real
+(non-dry-run) execution. Eleven realistic user-style prompts (evals 1-11,
+`evals.json`) plus one grader-only real-execution eval (12, `run.sh` only —
+see below) — one per behavior — drafted to match the skill-creator workflow.
 
 ## Behaviors covered
 
@@ -20,13 +21,36 @@ skill-creator workflow.
    source reporting.
 6. **Detect installed CLIs** — `detect` subcommand, `command -v` per CLI,
    non-zero exit when none installed.
+7. **Dash-prefixed prompt** — a prompt starting with `-` (e.g. `-explain this
+   code`) is accepted as the prompt, not parsed as an unknown flag, and still
+   reaches the child CLI behind a `--` delimiter.
+8. **`--context` pointing at a directory** — rejected with a clear
+   not-a-regular-file error instead of trying to read it.
+9. **`--context` file over the 256 KiB cap** — rejected rather than silently
+   truncated, so the user always knows exactly what was (or wasn't) sent.
+10. **Invalid `--timeout` value** — a non-numeric/non-positive `--timeout` is
+    rejected at parse time with a clear error.
+11. **Unknown `--cli` value** — an unrecognized `--cli` is rejected at parse
+    time with a clear error naming the valid CLIs.
+12. **Real execution (no dry-run)** — the only eval that unsets
+    `EXTERNAL_MODEL_DRYRUN` and actually execs a stub CLI, so the real-run
+    code path (not just `--dry-run` output) gets exercised: (a) the
+    dispatcher's exit code matches the stub's own exit code, and (b) with a
+    short `--timeout`, a hanging stub is actually killed rather than left to
+    run to completion. `run.sh` installs its own minimal `timeout` shim on
+    the stub `PATH` so this is deterministic even on hosts without GNU
+    `timeout`/`gtimeout` on `PATH`. This eval lives only in `run.sh` (not
+    `evals.json`), since it targets `run-model.sh`'s real-execution
+    machinery rather than a user-facing prompt scenario.
 
 ## Status
 
-All 6 evals have machine-checkable `expectations[]` arrays, encoded as an
-executable grader in `evals/run.sh`. Each expectation is a single verifiable
-string — the grader scores runs by matching them against dry-run output,
-captured stderr, exit codes, and config-file state.
+All 11 prompt-driven evals (`evals.json`) plus the grader-only real-execution
+eval 12 have machine-checkable `assertions[]`-equivalent checks, encoded as
+an executable grader in `evals/run.sh`. Each assertion is a single verifiable
+string or condition — the grader scores runs by matching them against
+dry-run output, captured stderr, exit codes, elapsed time, and config-file
+state.
 
 ## Running
 

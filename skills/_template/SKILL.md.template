@@ -4,7 +4,10 @@ description: >
   One or two sentences — what this skill does and when to trigger it.
   Use when the user says "X", mentions "Y", or needs "Z".
 # argument-hint: "Optional placeholder shown in slash-command UI"
-# disable-model-invocation: true  # Uncomment to require explicit slash-command invocation
+# compatibility: "Optional environment requirements, e.g. 'requires gh CLI on PATH'"
+# license: MIT  # Short license name or bundled license file per agentskills.io spec
+# allowed-tools: bash  # Space-separated pre-approved tools (experimental, spec field)
+# disable-model-invocation: true  # skills.sh convention, NOT in agentskills.io spec — requires explicit slash-command invocation
 ---
 
 # Skill Name

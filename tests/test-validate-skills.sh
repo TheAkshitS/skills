@@ -68,6 +68,25 @@ write_skill_raw() {
   printf '%s' "$2" > "$skill_dir/SKILL.md"
 }
 
+# Mirror an existing skills/<name>/SKILL.md into both in-repo distribution
+# mirrors (.claude/skills and .agents/skills), byte-for-byte, so the mirror
+# check sees a matching copy. Call after write_skill/write_skill_raw.
+write_mirror() {
+  local name="$1"
+  local m
+  for m in .claude/skills .agents/skills; do
+    mkdir -p "$TMPDIR/$m/$name"
+    cp "$TMPDIR/skills/$name/SKILL.md" "$TMPDIR/$m/$name/SKILL.md"
+  done
+}
+
+# Clear all mirror state so each mirror test starts from a known-empty base
+# (no dir at all -> whole-dir-missing is only a WARN, which the other tests
+# tolerate; a per-skill drift/orphan/missing is a hard error).
+reset_mirrors() {
+  rm -rf "$TMPDIR/.claude/skills" "$TMPDIR/.agents/skills"
+}
+
 update_plugin() {
   local skills_json=""
   for path in "$@"; do
@@ -259,23 +278,36 @@ else
   echo "PASS link-skills excludes _template"
 fi
 # Repo-symlink guard: if $DEST is already a symlink into the repo, the
-# script must refuse to run instead of writing symlinks back into skills/.
+# script must skip that target only (warn, and exit NON-ZERO so the skip is
+# visible to CI/`$?` gates) and leave it untouched, while any other target in
+# the same run still succeeds. This proves skip-one-continue-others AND that a
+# skipped target is signaled rather than swallowed as a silent exit 0.
 guard_home="$TMPDIR/guard-home"
-mkdir -p "$guard_home/.claude/skills"
-ln -sfn "$TMPDIR" "$guard_home/.claude/skills-link"
-# Point $DEST (which is $HOME/.claude/skills) at $guard_home/.claude/skills,
-# which is a real dir that contains a symlink pointing into the repo's skills
-# tree. Simpler: make $DEST itself a symlink into the repo.
+mkdir -p "$(dirname "$guard_home/.claude/skills")"
 guard_dest="$guard_home/.claude/skills"
-rm -rf "$guard_dest"
 ln -sfn "$TMPDIR" "$guard_dest"
 guard_out="$(cd "$TMPDIR" && HOME="$guard_home" bash scripts/link-skills.sh 2>&1)" || guard_code=$?
 guard_code=${guard_code:-0}
-if [ "$guard_code" -ne 0 ] && echo "$guard_out" | grep -q "symlink into this repo"; then
-  echo "PASS link-skills guards against symlinked \$HOME/.claude/skills pointing into repo"
-else
-  echo "FAIL link-skills should have refused repo-symlink DEST (code=$guard_code out=$guard_out)"
+other_target="$guard_home/.pi/agent/skills/valid-skill"
+if [ "$guard_code" -eq 0 ]; then
+  echo "FAIL link-skills guard: expected non-zero exit (skipped target must be signaled), got 0"
+  echo "$guard_out"
   FAILURES=$((FAILURES + 1))
+elif ! echo "$guard_out" | grep -q "symlink into this repo"; then
+  echo "FAIL link-skills guard: expected warning containing 'symlink into this repo'"
+  echo "$guard_out"
+  FAILURES=$((FAILURES + 1))
+elif [ "$(readlink "$guard_dest")" != "$TMPDIR" ]; then
+  echo "FAIL link-skills guard: offending target $guard_dest was modified (expected untouched symlink into repo)"
+  FAILURES=$((FAILURES + 1))
+elif [ -e "$TMPDIR/valid-skill" ]; then
+  echo "FAIL link-skills guard: script wrote through the symlinked target back into the repo"
+  FAILURES=$((FAILURES + 1))
+elif [ ! -L "$other_target" ]; then
+  echo "FAIL link-skills guard: other target $other_target should still be linked (skip-one-continue-others)"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS link-skills guards against symlinked \$HOME/.claude/skills pointing into repo, other targets still succeed"
 fi
 rm -rf "$TMPDIR/skills/valid-skill"
 
@@ -284,6 +316,115 @@ reset_manifests
 write_skill_raw "tab-indent" $'---\nname: tab-indent\ndescription: |\n\tindented with tab\n\tstill indented\n---\n'
 run_test "tab in block scalar fails" 1 "tab in block-scalar"
 rm -rf "$TMPDIR/skills/tab-indent"
+
+# 16. Mirror check: an active skill with a matching copy in both mirrors
+# passes with no mirror FAIL lines (proves the happy path is actually
+# reachable, so the later failure tests aren't just always-red).
+reset_manifests
+reset_mirrors
+write_skill "mirror-clean" '---
+name: mirror-clean
+description: Use when the user wants a mirrored skill.
+---'
+update_plugin "mirror-clean"
+update_readme "mirror-clean"
+write_mirror "mirror-clean"
+mirror_code=0
+mirror_out="$(cd "$TMPDIR" && bash scripts/validate-skills.sh 2>&1)" || mirror_code=$?
+if [ "$mirror_code" -ne 0 ]; then
+  echo "FAIL mirror clean passes: expected exit 0, got $mirror_code"
+  echo "$mirror_out"
+  FAILURES=$((FAILURES + 1))
+elif echo "$mirror_out" | grep -qiE 'drifted|orphaned mirror entry|SKILL\.md missing'; then
+  echo "FAIL mirror clean passes: unexpected mirror error in output"
+  echo "$mirror_out"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS mirror clean copy in both mirrors passes"
+fi
+rm -rf "$TMPDIR/skills/mirror-clean"
+reset_mirrors
+
+# 17. Mirror check: an active skill whose mirror copy is absent (mirror dir
+# exists but the per-skill SKILL.md is missing) is a hard error.
+reset_manifests
+reset_mirrors
+write_skill "mirror-missing" '---
+name: mirror-missing
+description: Use when the user wants a skill missing from a mirror.
+---'
+update_plugin "mirror-missing"
+update_readme "mirror-missing"
+write_mirror "mirror-missing"
+rm -f "$TMPDIR/.agents/skills/mirror-missing/SKILL.md"
+run_test "mirror missing SKILL.md fails" 1 "SKILL.md missing"
+rm -rf "$TMPDIR/skills/mirror-missing"
+reset_mirrors
+
+# 18. Mirror check: a mirror copy whose body has drifted (beyond trailing
+# whitespace) from skills/ is a hard error.
+reset_manifests
+reset_mirrors
+write_skill "mirror-drift" '---
+name: mirror-drift
+description: Use when the user wants a drifted mirror.
+---'
+update_plugin "mirror-drift"
+update_readme "mirror-drift"
+write_mirror "mirror-drift"
+printf 'drifted body line\n' >> "$TMPDIR/.claude/skills/mirror-drift/SKILL.md"
+run_test "mirror drift fails" 1 "drifted from"
+rm -rf "$TMPDIR/skills/mirror-drift"
+reset_mirrors
+
+# 19. Mirror check: a mirror entry with no skills/ source (e.g. a skill
+# deleted from skills/ without re-running the sync) is an orphan hard error.
+reset_manifests
+reset_mirrors
+write_skill "mirror-orphan-src" '---
+name: mirror-orphan-src
+description: Use when the user wants an orphan-adjacent skill.
+---'
+update_plugin "mirror-orphan-src"
+update_readme "mirror-orphan-src"
+write_mirror "mirror-orphan-src"
+# Add a ghost dir that exists only in the mirror, with no skills/ counterpart.
+mkdir -p "$TMPDIR/.claude/skills/mirror-ghost"
+printf '%s\n' '---' 'name: mirror-ghost' 'description: orphaned.' '---' \
+  > "$TMPDIR/.claude/skills/mirror-ghost/SKILL.md"
+run_test "mirror orphan entry fails" 1 "orphaned mirror entry"
+rm -rf "$TMPDIR/skills/mirror-orphan-src"
+reset_mirrors
+
+# 20. Mirror check: a copy differing only in trailing whitespace still passes
+# (proves the whitespace-normalized comparison, not a byte-exact one).
+reset_manifests
+reset_mirrors
+write_skill "mirror-ws" '---
+name: mirror-ws
+description: Use when the user wants a whitespace-only mirror difference.
+---'
+update_plugin "mirror-ws"
+update_readme "mirror-ws"
+write_mirror "mirror-ws"
+# Re-emit the mirror copy with trailing spaces appended to every line.
+sed -e 's/$/   /' "$TMPDIR/skills/mirror-ws/SKILL.md" \
+  > "$TMPDIR/.claude/skills/mirror-ws/SKILL.md"
+mirror_code=0
+mirror_out="$(cd "$TMPDIR" && bash scripts/validate-skills.sh 2>&1)" || mirror_code=$?
+if [ "$mirror_code" -ne 0 ]; then
+  echo "FAIL mirror trailing-whitespace tolerated: expected exit 0, got $mirror_code"
+  echo "$mirror_out"
+  FAILURES=$((FAILURES + 1))
+elif echo "$mirror_out" | grep -qiE 'drifted|orphaned mirror entry|SKILL\.md missing'; then
+  echo "FAIL mirror trailing-whitespace tolerated: unexpected mirror error in output"
+  echo "$mirror_out"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS mirror trailing-whitespace-only difference is tolerated"
+fi
+rm -rf "$TMPDIR/skills/mirror-ws"
+reset_mirrors
 
 echo ""
 if [ "$FAILURES" -eq 0 ]; then

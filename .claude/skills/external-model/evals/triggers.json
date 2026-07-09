@@ -1,0 +1,30 @@
+{
+  "skill_name": "external-model",
+  "trigger_phrases": [
+    "another model",
+    "GPT-5",
+    "Gemini",
+    "second opinion",
+    "opencode",
+    "cursor-agent",
+    "kiro-cli"
+  ],
+  "positive": [
+    "What would GPT-5 think of this retry-loop backoff?",
+    "Get a second opinion from another model before I ship this",
+    "Ask Gemini to weigh in on whether this API design is sound",
+    "Delegate this refactor to cursor-agent — it handles big mechanical moves",
+    "Run this prompt through opencode and show me the answer",
+    "Switch my default external-model CLI to kiro-cli",
+    "Before I commit, ask another model if my approach makes sense"
+  ],
+  "negative": [
+    "Refactor this function to use early returns",
+    "Draw a C4 context diagram for our system",
+    "Write a unit test for the retry loop with jitter",
+    "Summarize this article into a five-bullet tl;dr",
+    "Why does Python's GIL prevent true parallel threads",
+    "Lint this shell script with shellcheck",
+    "Translate this README from English to French"
+  ]
+}

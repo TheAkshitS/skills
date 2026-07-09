@@ -9,3 +9,7 @@ node_modules/
 
 temp
 .superpowers/
+
+# skills.sh consumer-side install lockfile; created by `npx skills add`, not a
+# source artifact of this repo (this repo is the skills' source, not a consumer).
+skills-lock.json
